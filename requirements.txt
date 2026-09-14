@@ -1,0 +1,13 @@
+requests
+beautifulsoup4
+aiohttp
+pandas
+numpy
+pymysql
+python-dotenv
+python-dateutil
+pytz
+Unidecode
+SQLAlchemy
+discord.py
+discordwebhook
