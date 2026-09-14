@@ -11,3 +11,4 @@ Unidecode
 SQLAlchemy
 discord.py
 discordwebhook
+rapidfuzz
