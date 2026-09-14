@@ -8,7 +8,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from src.data_scraping.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection
+from src.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection
 
 BASE_URL = "https://www.futbin.com"
 HEADERS = {
