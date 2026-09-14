@@ -3,6 +3,7 @@ from src.database.db_schema import initcardTable
 from src.deal_finder.deal_finder import drop_strategy, icon_fluctuation_strategy
 from src.notifier.discord import client, DISCORD_TOKEN, send_message
 from src.notifier.notify import notify_drop_deals, notify_icon_fluctuations
+from src.database.db_schema import initcardTable
 import asyncio
 
 SCRAPE_INTERVAL_SECONDS = 3600
@@ -31,6 +32,7 @@ async def hourly_loop():
         await asyncio.sleep(max(0, SCRAPE_INTERVAL_SECONDS - elapsed))
 
 async def main():
+    initcardTable()
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
         # hourly_loop(),
