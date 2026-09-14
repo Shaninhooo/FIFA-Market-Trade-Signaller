@@ -1,4 +1,4 @@
-from src.data_scraping.scraper import scrape_players, collect_all_hrefs, scrape_hrefs() 
+from src.data_scraping.scraper import scrape_players, collect_all_hrefs, scrape_hrefs
 from src.db_utils import initcardTable
 import asyncio
 
