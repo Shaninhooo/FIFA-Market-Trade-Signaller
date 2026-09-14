@@ -115,7 +115,7 @@ def load_meta_hrefs(version, min_price=5000):
 
 
 
-async def scrape_fc27_players(version):
+async def scrape_players(version):
 
     # Load hrefs
     hrefs = load_meta_hrefs(version)
@@ -142,7 +142,7 @@ async def scrape_fc27_players(version):
 
                 if not metadata_exists:
                     # Scrape full metadata
-                    metadata = await asyncio.to_thread(scrape_futbin_player, href)
+                    metadata = await asyncio.to_thread(scrape_player, href)
                     if not metadata:
                         print(f"Skipped player {href} because metadata could not be scraped")
                         return None
@@ -194,7 +194,7 @@ def normalize_column(stat_name: str) -> str:
     return stat_name
 
 # Scrapes Specific Futbin Player Metadata
-def scrape_futbin_player(href):
+def scrape_player(href):
 
     url = f"https://www.futbin.com{href}"
     response = requests.get(url, headers=HEADERS)
