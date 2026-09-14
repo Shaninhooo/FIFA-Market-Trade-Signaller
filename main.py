@@ -10,7 +10,7 @@ async def main():
     versions = ["gold_rare", "base_icon"]
 
     # Scraping Task
-    scrape_hrefs()
+    # scrape_hrefs()
     await scrape_players_stats()
     # for version in versions:
     #     collect_all_hrefs(version)  # synchronous
