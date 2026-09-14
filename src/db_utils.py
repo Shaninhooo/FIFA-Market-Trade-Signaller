@@ -401,6 +401,22 @@ def insert_card_stats(card_id, stats_list):
         conn.close()
 
 
+def load_meta_hrefs(version, min_price=5000):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT c.href
+                FROM hrefs c
+                LEFT JOIN market_sales ms ON c.card_id = ms.card_id
+                WHERE c.version = %s
+                  AND (ms.sold_price > %s OR ms.sold_price IS NULL);
+            """, (version, min_price))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
 
 def drop_all_tables():
     conn = get_connection()

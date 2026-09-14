@@ -8,7 +8,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from src.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection
+from src.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, load_meta_hrefs
 
 BASE_URL = "https://www.futbin.com"
 HEADERS = {
@@ -21,6 +21,7 @@ HEADERS = {
 def extract_card_id(href: str) -> int | None:
     match = re.search(r"/player/(\d+)/", href)
     return int(match.group(1)) if match else None
+
 
 def collect_all_hrefs(version):
     hrefs = set()
@@ -36,7 +37,7 @@ def collect_all_hrefs(version):
     page_num = 1
 
     while True:
-        url = f"{BASE_URL}/27/players?page={page_num}&version={version}"
+        url = f"{BASE_URL}/27/players?page={page_num}"
         print(f"[Page {page_num}] Fetching {url}")
 
         response = requests.get(url, headers=HEADERS)
@@ -48,7 +49,7 @@ def collect_all_hrefs(version):
         rows = soup.find_all("tr", class_="player-row")
 
         # Stop only when page has no rows at all
-        if not rows:
+        if not rows or page_num==100:
             print(f"No player rows found, stopping at page {page_num}")
             break
 
@@ -95,23 +96,78 @@ def collect_all_hrefs(version):
     return list(hrefs)
 
 
-
-
-def load_meta_hrefs(version, min_price=5000):
+def scrape_hrefs():
+    hrefs = set()
+    new_hrefs = 0
     conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT c.href
-                FROM hrefs c
-                LEFT JOIN market_sales ms ON c.card_id = ms.card_id
-                WHERE c.version = %s
-                  AND (ms.sold_price > %s OR ms.sold_price IS NULL);
-            """, (version, min_price))
-            rows = cur.fetchall()
-            return [row['href'] for row in rows]
-    finally:
-        conn.close()
+
+    # Load existing hrefs from DB
+    with conn.cursor() as cur:
+        cur.execute("SELECT href FROM hrefs")
+        for row in cur.fetchall():
+            hrefs.add(row['href'])
+
+    page_num = 1
+
+    while True:
+        url = f"{BASE_URL}/27/players?page={page_num}"
+        print(f"[Page {page_num}] Fetching {url}")
+
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code != 200:
+            print(f"Failed to fetch page {page_num}")
+            break
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        rows = soup.find_all("tr", class_="player-row")
+
+        # Stop only when page has no rows at all
+        if not rows or page_num==100:
+            print(f"No player rows found, stopping at page {page_num}")
+            break
+
+        page_new_hrefs = 0
+        new_entries = []
+
+        for row in rows:
+            name_tag = row.find("a", class_="table-player-name")
+            if name_tag and "href" in name_tag.attrs:
+                href = name_tag["href"]
+                card_id = extract_card_id(href)
+                version_detail = row.find("div", class_="table-player-revision")
+                price = row.find("div", class_="price")
+                if "SBC" in version_detail.get_text():
+                    continue
+                if price:
+                    price_val = price.get_text(strip=True).replace(",", "")
+                    if price_val == "0":
+                        continue
+                else:
+                    continue
+
+                if href not in hrefs:
+                    hrefs.add(href)
+                    page_new_hrefs += 1
+                    new_hrefs += 1
+                    new_entries.append((card_id, href))
+
+        # Bulk insert new hrefs into DB
+        if new_entries:
+            with conn.cursor() as cur:
+                cur.executemany("""
+                    INSERT INTO hrefs (card_id, href)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE card_id=card_id;
+                """, new_entries)
+            conn.commit()
+
+        print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
+        page_num += 1
+
+    print(f"Collected {new_hrefs} new hrefs in total.")
+    conn.close()
+    return list(hrefs)
+
 
 
 
