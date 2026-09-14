@@ -1,7 +1,7 @@
 from src.data_scraping.scraper import hourly_scrape
 from src.database.db_schema import initcardTable
 from src.deal_finder.deal_finder import drop_strategy, icon_fluctuation_strategy
-from src.notifier.discord import client, DISCORD_TOKEN, send_message
+from src.notifier.discord import client, DISCORD_TOKEN
 from src.notifier.notify import notify_drop_deals, notify_icon_fluctuations
 from src.database.db_schema import initcardTable
 import asyncio
