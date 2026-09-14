@@ -31,11 +31,12 @@ async def on_ready():
 
 # ------------------- BOT FUNCTIONS -------------------
 
-# def send_message(message: str, version):
-#     if not DISCORD_WEBHOOK:
-#         print("⚠️ No Discord webhook set.")
-#         return
-#     webhook_client.post(content=message)
+def send_message(message: str, version):
+    # if not DISCORD_WEBHOOK:
+    #     print("⚠️ No Discord webhook set.")
+    #     return
+    # webhook_client.post(content=message)
+    return
 
 
 
