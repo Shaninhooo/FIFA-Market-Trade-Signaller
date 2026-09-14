@@ -1,4 +1,4 @@
-from src.data_scraping.scraper import scrape_players, collect_all_hrefs, scrape_hrefs
+from src.data_scraping.scraper import scrape_players, collect_all_hrefs, scrape_hrefs, scrape_players_stats
 from src.db_utils import initcardTable
 import asyncio
 
@@ -11,6 +11,7 @@ async def main():
 
     # Scraping Task
     scrape_hrefs()
+    await scrape_players_stats()
     # for version in versions:
     #     collect_all_hrefs(version)  # synchronous
         # await scrape_players(version)  # async

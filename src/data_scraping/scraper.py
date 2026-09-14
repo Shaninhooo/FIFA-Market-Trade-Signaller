@@ -159,6 +159,67 @@ def scrape_hrefs():
     return list(hrefs)
 
 
+async def scrape_players_stats():
+
+    hrefs = set()
+    conn = get_connection()
+
+    # Load hrefs
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT href FROM hrefs")
+            for row in cur.fetchall():
+                hrefs.add(row['href'])
+    finally:
+        conn.close()
+    print(f"Loaded {len(hrefs)} hrefs.")
+
+    sem = asyncio.Semaphore(2)  # concurrency limit
+
+    async def process_player(href):
+        async with sem:
+            await asyncio.sleep(random.uniform(0.5,2))
+            try:
+                # Extract card_id from href
+                card_id = int(href.split("/")[3])
+
+                # Check if metadata already exists in DB
+                conn = get_connection()
+                metadata_exists = False
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM cards WHERE card_id=%s LIMIT 1", (card_id,))
+                        metadata_exists = cur.fetchone() is not None
+                finally:
+                    conn.close()
+
+                if not metadata_exists:
+                    # Scrape full metadata
+                    metadata = await asyncio.to_thread(scrape_player, href)
+                    if not metadata:
+                        print(f"Skipped player {href} because metadata could not be scraped")
+                        return None
+
+                    # Insert metadata into DB
+                    insert_card(card_id, metadata["details"], "27")
+                    insert_card_stats(card_id, metadata["stats"])
+                    insert_card_roles(card_id, metadata["roles"])
+                    insert_card_playstyles(card_id, metadata["playstyles"])
+                else:
+                    print(f"Metadata already exists for player {card_id}, skipping scraping")
+                    metadata = None  # we don't need metadata for printing
+
+                return card_id
+
+            except Exception as e:
+                print(f"Error scraping {href}: {e}")
+                return None
+
+    tasks = [process_player(href) for href in hrefs]
+    for coro in asyncio.as_completed(tasks):
+        await coro
+
+    return
 
 
 async def scrape_players(version):
