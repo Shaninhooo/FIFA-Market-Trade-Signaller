@@ -229,8 +229,9 @@ async def scrape_players(version):
     print(f"Loaded {len(hrefs)} hrefs.")
 
     sem = asyncio.Semaphore(2)  # concurrency limit
+    timeout = aiohttp.ClientTimeout(total=15)
 
-    async def process_player(href):
+    async def process_player(href, session):
         async with sem:
             await asyncio.sleep(random.uniform(0.5,2))
             try:
@@ -265,7 +266,7 @@ async def scrape_players(version):
 
                 # Always scrape market sales
                 sales_href = href.replace("player", "sales")
-                sales = await get_sales(sales_href)
+                sales = await get_sales(sales_href, session)
                 all_prices = []
                 for platform, s in sales.items():
                     for sale in s:
@@ -281,9 +282,10 @@ async def scrape_players(version):
                 print(f"Error scraping {href}: {e}")
                 return None
 
-    tasks = [process_player(href) for href in hrefs]
-    for coro in asyncio.as_completed(tasks):
-        await coro
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        tasks = [process_player(href, session) for href in hrefs]
+        for coro in asyncio.as_completed(tasks):
+            await coro
 
     return
 
@@ -479,11 +481,15 @@ def scrape_player(href):
 async def fetch_sales(session, url):
     """Fetch page content asynchronously."""
     async with session.get(url, headers=HEADERS) as resp:
+        if resp.status != 200:
+            print(f"Failed to fetch sales page {url} (status {resp.status})")
+            return None
         return await resp.text()
 
 
 
 def parse_sales(html):
+    sales_data = []
     try:
         soup = BeautifulSoup(html, "html.parser")
         sales_table = soup.find("tbody")
@@ -491,20 +497,24 @@ def parse_sales(html):
             print(f"No sales table found")
             return []
 
-        sales_data = []
         uk = pytz.timezone("Europe/London")
         adelaide = pytz.timezone("Australia/Adelaide")
         cutoff = adelaide.localize(datetime.datetime(2024, 1, 1))
+        now = datetime.datetime.now()
 
         for row in sales_table.find_all("tr"):
             cols = row.find_all("td")
+            if len(cols) < 6:
+                continue
 
             # Parse date/time
             date_span = cols[0].find("span", class_="sales-date-time")
             sale_time_str = date_span.get_text(strip=True) if date_span else None
             if sale_time_str:
                 naive_dt = datetime.datetime.strptime(sale_time_str, "%b %d, %I:%M %p")
-                naive_dt = naive_dt.replace(year=datetime.datetime.now().year)
+                # Sales scraped in January can still be dated in the prior December
+                year = now.year - 1 if naive_dt.month == 12 and now.month == 1 else now.year
+                naive_dt = naive_dt.replace(year=year)
                 uk_dt = uk.localize(naive_dt)           # make it aware
                 adelaide_dt = uk_dt.astimezone(adelaide)
             else:
@@ -539,15 +549,14 @@ def parse_sales(html):
 
 
 
-async def get_sales(sales_href):
+async def get_sales(sales_href, session):
     platforms = ["pc", "ps"]
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for platform in platforms:
-            url = f"{BASE_URL}{sales_href}?platform={platform}"
-            tasks.append(fetch_sales(session, url))
+    tasks = []
+    for platform in platforms:
+        url = f"{BASE_URL}{sales_href}?platform={platform}"
+        tasks.append(fetch_sales(session, url))
 
-        html_results = await asyncio.gather(*tasks, return_exceptions=True)
+    html_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Parse HTML for each platform
     sales_by_platform = {}
