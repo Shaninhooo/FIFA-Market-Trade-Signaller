@@ -23,7 +23,7 @@ def main():
         if name_tag and "href" in name_tag.attrs:
             href = name_tag["href"]
             card_id = extract_card_id(href)
-            print(card_id)
+            print()
 
 if __name__=="__main__":
     main()

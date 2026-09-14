@@ -1,4 +1,5 @@
 import pymysql
+import pandas as pd
 from dotenv import load_dotenv
 import os
 import asyncio
@@ -17,191 +18,7 @@ def get_connection():
         cursorclass=pymysql.cursors.DictCursor
     )
 
-def initcardTable():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    # scraped_hrefs table
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS hrefs (
-            card_id INT AUTO_INCREMENT PRIMARY KEY,
-            href VARCHAR(255),
-            version VARCHAR(20)
-        )
-    """)
-
-    # cards table
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS cards (
-            card_id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(50) NOT NULL,
-            game INT,
-            version VARCHAR(20),
-            nationality VARCHAR(50),
-            league VARCHAR(50),
-            club VARCHAR(50),
-            position VARCHAR(3),
-            rating INT,
-            weak_foot INT,
-            skill_move INT,
-            height INT,
-            accelerate VARCHAR(20)
-        )
-    """)
-
-    # card_playstyles
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_playstyles (
-            card_id INT,
-            playstyle VARCHAR(50) NOT NULL,
-            plus TINYINT(1) NOT NULL DEFAULT 0,
-            PRIMARY KEY(card_id, playstyle),
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_roles
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_roles (
-            card_id INT,
-            role VARCHAR(50) NOT NULL,
-            position VARCHAR(50) NOT NULL,
-            plus SMALLINT DEFAULT 1,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_pace_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_pace_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            pace_overall INT,
-            acceleration INT,
-            sprint_speed INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_shooting_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_shooting_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            shooting_overall INT,
-            att_position INT,
-            finishing INT,
-            shot_power INT,
-            long_shots INT,
-            volleys INT,
-            penalties INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_passing_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_passing_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            passing_overall INT,
-            vision INT,
-            crossing INT,
-            fk_acc INT,
-            short_pass INT,
-            long_pass INT,
-            curve INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_dribbling_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_dribbling_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            dribbling_overall INT,
-            agility INT,
-            balance INT,
-            reactions INT,
-            ball_control INT,
-            dribbling INT,
-            composure INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_defending_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_defending_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            defending_overall INT,
-            interceptions INT,
-            heading_acc INT,
-            def_aware INT,
-            stand_tackle INT,
-            slide_tackle INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # card_physical_stats
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS card_physical_stats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            physical_overall INT,
-            jumping INT,
-            stamina INT,
-            strength INT,
-            aggression INT,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # market_sales
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS market_sales (
-            sale_id INT AUTO_INCREMENT PRIMARY KEY,
-            card_id INT,
-            platform VARCHAR(20),
-            sale_type VARCHAR(10),
-            sale_time DATETIME NOT NULL,
-            listed_price INT NOT NULL,
-            sold_price INT,
-            was_sold TINYINT(1) AS (sold_price IS NOT NULL AND sold_price <> 0) STORED,
-            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
-        )
-    """)
-
-    # recurring_events
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS recurring_events (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            event_name TEXT NOT NULL,
-            frequency TEXT NOT NULL,
-            day_of_week INT,
-            time_of_day TIME
-        )
-    """)
-
-    # unique_events
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS unique_events (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            event_name TEXT NOT NULL,
-            version VARCHAR(20),
-            start_datetime DATETIME NOT NULL,
-            end_datetime DATETIME NOT NULL
-        )
-    """)
-
-    print("Tables Initialized (MySQL)...")
-    conn.commit()
-    cur.close()
-    conn.close()
-
+# ------------------- DATA INSERTING -------------------
 
 
 def insert_sale_db(card_id, sale_data):
@@ -401,7 +218,9 @@ def insert_card_stats(card_id, stats_list):
         conn.close()
 
 
-def load_meta_hrefs(version, min_price=5000):
+# ------------------- DATA FETCHING -------------------
+
+def fetch_meta_hrefs(version, min_price=5000):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -417,6 +236,59 @@ def load_meta_hrefs(version, min_price=5000):
     finally:
         conn.close()
 
+def fetch_drop_candidates(platform="pc"):
+    """Fetch raw sales in last 8 hours for dip detection"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    ms.sale_time,
+                    ms.sold_price,
+                    ms.platform
+                FROM market_sales ms
+                JOIN cards c ON ms.card_id = c.card_id
+                WHERE ms.sold_price > 10000
+                  AND ms.platform = %s
+                  AND c.version NOT IN ('All Icons')
+                  AND ms.sale_time >= NOW() - INTERVAL 8 HOUR
+            """, (platform,))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def fetch_icon_fluctuations(platform="pc"):
+    """Fetch raw Icon/Hero sales in last 6 hours for fluctuation detection"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    ms.sale_time,
+                    ms.sold_price,
+                    ms.platform
+                FROM market_sales ms
+                JOIN cards c ON ms.card_id = c.card_id
+                WHERE ms.sold_price > 0
+                  AND ms.platform = %s
+                  AND c.version IN ('All Icons')
+                  AND ms.sale_time >= NOW() - INTERVAL 6 HOUR
+            """, (platform,))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
+fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
+
+
+# ------------------- DATA DROPPING -------------------
 
 def drop_all_tables():
     conn = get_connection()

@@ -8,7 +8,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from src.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, load_meta_hrefs
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, load_meta_hrefs
 
 BASE_URL = "https://www.futbin.com"
 HEADERS = {
@@ -568,3 +568,12 @@ async def get_sales(sales_href, session):
 
     return sales_by_platform
 
+
+# Execute Hourly Scrape
+async def hourly_scrape():
+
+    # Get all card versions
+    versions = ["gold_rare", "base_icon"]
+    for version in versions:
+            collect_all_hrefs(version)  # synchronous
+            await scrape_players(version)  # async
