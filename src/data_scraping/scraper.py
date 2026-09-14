@@ -36,7 +36,7 @@ def collect_all_hrefs(version):
     page_num = 1
 
     while True:
-        url = f"{BASE_URL}/26/players?page={page_num}&version={version}"
+        url = f"{BASE_URL}/27/players?page={page_num}&version={version}"
         print(f"[Page {page_num}] Fetching {url}")
 
         response = requests.get(url, headers=HEADERS)
@@ -115,7 +115,7 @@ def load_meta_hrefs(version, min_price=5000):
 
 
 
-async def scrape_fc26_players(version):
+async def scrape_fc27_players(version):
 
     # Load hrefs
     hrefs = load_meta_hrefs(version)
@@ -148,7 +148,7 @@ async def scrape_fc26_players(version):
                         return None
 
                     # Insert metadata into DB
-                    insert_card(card_id, metadata["details"], "26")
+                    insert_card(card_id, metadata["details"], "27")
                     insert_card_stats(card_id, metadata["stats"])
                     insert_card_roles(card_id, metadata["roles"])
                     insert_card_playstyles(card_id, metadata["playstyles"])
@@ -220,7 +220,7 @@ def scrape_futbin_player(href):
                 name = unidecode(name_div.text.strip())
 
     # Get Player Rating
-    rating_tag = player_card.select_one("div.playercard-26-rating")
+    rating_tag = player_card.select_one("div.playercard-27-rating")
     if rating_tag:
         rating_text = rating_tag.get_text(strip=True)
         # extract only digits

@@ -6,17 +6,15 @@ async def main():
 
     # Init Tables
     initcardTable()
-    
-    # Collect Hrefs From Futbin
-    
+
+    versions = ["gold_rare", "base_icon"]
+
 
     # Scraping Task
 
-    # Create tasks for all versions
-    versions = ["gold_rare", "icons", "heroes", "gold_if", "cornerstones"]
     for version in versions:
         collect_all_hrefs(version)  # synchronous
-        await scrape_fc26_players(version)  # async
+        # await scrape_fc27_players(version)  # async
     
     print("Finished Scraping Process!")
 
