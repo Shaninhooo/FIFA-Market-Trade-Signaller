@@ -134,16 +134,6 @@ def scrape_hrefs():
             if name_tag and "href" in name_tag.attrs:
                 href = name_tag["href"]
                 card_id = extract_card_id(href)
-                version_detail = row.find("div", class_="table-player-revision")
-                price = row.find("div", class_="price")
-                if "SBC" in version_detail.get_text():
-                    continue
-                if price:
-                    price_val = price.get_text(strip=True).replace(",", "")
-                    if price_val == "0":
-                        continue
-                else:
-                    continue
 
                 if href not in hrefs:
                     hrefs.add(href)
