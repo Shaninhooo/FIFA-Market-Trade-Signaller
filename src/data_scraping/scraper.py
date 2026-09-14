@@ -8,7 +8,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, load_meta_hrefs
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs
 
 BASE_URL = "https://www.futbin.com"
 HEADERS = {
@@ -225,7 +225,7 @@ async def scrape_players_stats():
 async def scrape_players(version):
 
     # Load hrefs
-    hrefs = load_meta_hrefs(version)
+    hrefs = fetch_meta_hrefs(version)
     print(f"Loaded {len(hrefs)} hrefs.")
 
     sem = asyncio.Semaphore(2)  # concurrency limit
