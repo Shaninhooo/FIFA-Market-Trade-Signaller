@@ -8,13 +8,9 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-import psutil
-import json
-import os
-from db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, add_price_to_database, async_insert_sale_db
+from src.data_scraping.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection
 
-BASE_URL = "https://www.fut.gg"
-CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+BASE_URL = "https://www.futbin.com"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -22,34 +18,25 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-version_ids = {
-    "gold": 1,
-    "gold_rare": 2,
-    "gold_common": 3,
-    "silver": 4,
-    "silver_rare": 5,
-    "silver_common": 6
-}
+def extract_card_id(href: str) -> int | None:
+    match = re.search(r"/player/(\d+)/", href)
+    return int(match.group(1)) if match else None
 
-
-# Main
-
-def collect_futgg_hrefs(version):
+def collect_all_hrefs(version):
     hrefs = set()
-    href_lines = 0
-    # Load existing hrefs from file
-    if os.path.exists(f"data_scraping/futgg_hrefs/{version}_hrefs.txt"):
-        with open(f"data_scraping/futgg_hrefs/{version}_hrefs.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                hrefs.add(line.strip())
-                href_lines += 1
-
-    completed_pages = href_lines // 30  # integer division
-    page_num = 1 + completed_pages
     new_hrefs = 0
+    conn = get_connection()
+
+    # Load existing hrefs from DB
+    with conn.cursor() as cur:
+        cur.execute("SELECT href FROM hrefs WHERE version=%s", (version,))
+        for row in cur.fetchall():
+            hrefs.add(row['href']) 
+
+    page_num = 1
 
     while True:
-        url = f"{BASE_URL}/players/?page={page_num}&quality_id=[{version_ids[version]}]"
+        url = f"{BASE_URL}/26/players?page={page_num}&version={version}"
         print(f"[Page {page_num}] Fetching {url}")
 
         response = requests.get(url, headers=HEADERS)
@@ -58,109 +45,159 @@ def collect_futgg_hrefs(version):
             break
 
         soup = BeautifulSoup(response.text, "html.parser")
-        players = soup.find_all("a", class_="group/player")
+        rows = soup.find_all("tr", class_="player-row")
 
-        if not players:
+        # Stop only when page has no rows at all
+        if not rows:
             print(f"No player rows found, stopping at page {page_num}")
             break
 
         page_new_hrefs = 0
-        for player in players:
-            if player and "href" in player.attrs:
-                href = player["href"]
+        new_entries = []
+
+        for row in rows:
+            name_tag = row.find("a", class_="table-player-name")
+            if name_tag and "href" in name_tag.attrs:
+                href = name_tag["href"]
+                card_id = extract_card_id(href)
+                version_detail = row.find("div", class_="table-player-revision")
+                price = row.find("div", class_="price")
+                if "SBC" in version_detail.get_text():
+                    continue
+                if price:
+                    price_val = price.get_text(strip=True).replace(",", "")
+                    if price_val == "0":
+                        continue
+                else:
+                    continue
+
                 if href not in hrefs:
                     hrefs.add(href)
                     page_new_hrefs += 1
                     new_hrefs += 1
+                    new_entries.append((card_id, href, version))
 
-        if page_new_hrefs == 0:
-            print(f"No new hrefs found on page {page_num}, stopping.")
-            break
+        # Bulk insert new hrefs into DB
+        if new_entries:
+            with conn.cursor() as cur:
+                cur.executemany("""
+                    INSERT INTO hrefs (card_id, href, version)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE card_id=card_id;
+                """, new_entries)
+            conn.commit()
 
         print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
-
         page_num += 1
 
-    # Save all hrefs back to file
-    with open(f"data_scraping/futgg_hrefs/{version}_hrefs.txt", "w", encoding="utf-8") as f:
-        for href in sorted(hrefs):  # optional: sort to keep order consistent
-            f.write(href + "\n")
-
     print(f"Collected {new_hrefs} new hrefs in total.")
+    conn.close()
     return list(hrefs)
 
 
-def load_hrefs(version):
-    """Load hrefs from hrefs.txt if it exists."""
-    hrefs = []
-    if os.path.exists(f"data_scraping/futgg_hrefs/{version}_hrefs.txt"):
-        with open(f"data_scraping/futgg_hrefs/{version}_hrefs.txt", "r", encoding="utf-8") as f:
-            hrefs = [line.strip() for line in f if line.strip()]
-        print(f"Loaded {len(hrefs)} {version} hrefs from file.")
-    return hrefs
+
+
+def load_meta_hrefs(version, min_price=5000):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT c.href
+                FROM hrefs c
+                LEFT JOIN market_sales ms ON c.card_id = ms.card_id
+                WHERE c.version = %s
+                  AND (ms.sold_price > %s OR ms.sold_price IS NULL);
+            """, (version, min_price))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
+
 
 async def scrape_fc26_players(version):
 
     # Load hrefs
-    hrefs = load_hrefs("26", version)
-    print(f"Loaded {len(hrefs)} futgg hrefs")
-    results = []
+    hrefs = load_meta_hrefs(version)
+    print(f"Loaded {len(hrefs)} hrefs.")
 
-    sem = asyncio.Semaphore(5)  # concurrency limit
+    sem = asyncio.Semaphore(2)  # concurrency limit
 
     async def process_player(href):
         async with sem:
             await asyncio.sleep(random.uniform(0.5,2))
-            metadata = scrape_futgg_player(href)
-            if not metadata: return None
-            card_id = metadata["id"]
-            sales_href = href.replace("player", "sales")
-            sales = await get_sales(sales_href)
-            result = {
-                "card_id": card_id,
-                "details": metadata["details"],
-                "playstyles": metadata["playstyles"],
-                "roles": metadata["roles"],
-                "stats": metadata["stats"],
-                "market_sales": sales
-            }
-            print(f"Scraped {metadata['details']['name']}")
-            return result
+            try:
+                # Extract card_id from href
+                card_id = int(href.split("/")[3])
+
+                # Check if metadata already exists in DB
+                conn = get_connection()
+                metadata_exists = False
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM cards WHERE card_id=%s LIMIT 1", (card_id,))
+                        metadata_exists = cur.fetchone() is not None
+                finally:
+                    conn.close()
+
+                if not metadata_exists:
+                    # Scrape full metadata
+                    metadata = await asyncio.to_thread(scrape_futbin_player, href)
+                    if not metadata:
+                        print(f"Skipped player {href} because metadata could not be scraped")
+                        return None
+
+                    # Insert metadata into DB
+                    insert_card(card_id, metadata["details"], "26")
+                    insert_card_stats(card_id, metadata["stats"])
+                    insert_card_roles(card_id, metadata["roles"])
+                    insert_card_playstyles(card_id, metadata["playstyles"])
+                else:
+                    print(f"Metadata already exists for player {card_id}, skipping scraping")
+                    metadata = None  # we don't need metadata for printing
+
+                # Always scrape market sales
+                sales_href = href.replace("player", "sales")
+                sales = await get_sales(sales_href)
+                all_prices = []
+                for platform, s in sales.items():
+                    for sale in s:
+                        sale["platform"] = platform
+                        all_prices.append(sale)
+
+                await async_insert_sale_db(card_id, all_prices)
+                print(f"✅ Processed player {card_id} (metadata {'exists' if metadata_exists else 'added'})")
+
+                return card_id
+
+            except Exception as e:
+                print(f"Error scraping {href}: {e}")
+                return None
 
     tasks = [process_player(href) for href in hrefs]
     for coro in asyncio.as_completed(tasks):
-        res = await coro
-        if res is None:
-            print("Skipped a player because scraping returned None")
-            continue  # skip this iteration
-        
-        res_card_id =  res["card_id"]
-        
-        # Insert Scraped Data to Database 
-        # Insert player into DB
-        insert_card(res_card_id, res["details"], "26")
-        # Insert stats
-        insert_card_stats(res_card_id, res["stats"])
-        # Insert roles/playstyles if available
-        insert_card_roles(res_card_id, res["roles"])
-        insert_card_playstyles(res_card_id, res["playstyles"])
+        await coro
 
-        all_prices = []
-        for platform, sales in res["market_sales"].items():
-            for sale in sales:
-                sale["platform"] = platform
-                all_prices.append(sale)
-        await async_insert_sale_db(res_card_id, all_prices)
-    
     return
 
 
-# Player Details
 
+def normalize_column(stat_name: str) -> str:
+    """
+    Normalize stat name:
+    - Remove special characters
+    - Replace spaces with underscores
+    - Convert to lowercase
+    """
+    stat_name = re.sub(r'[^A-Za-z0-9 ]+', '', stat_name)
+    stat_name = stat_name.replace(" ", "_").lower()
+    return stat_name
+
+# Scrapes Specific Futbin Player Metadata
 def scrape_futbin_player(href):
 
     url = f"https://www.futbin.com{href}"
-    response = requests.get(url)
+    response = requests.get(url, headers=HEADERS)
     if response.status_code != 200:
         print(f"Failed to fetch {href}")
         return None
@@ -183,7 +220,7 @@ def scrape_futbin_player(href):
                 name = unidecode(name_div.text.strip())
 
     # Get Player Rating
-    rating_tag = player_card.select_one("div[class*='rating']")
+    rating_tag = player_card.select_one("div.playercard-26-rating")
     if rating_tag:
         rating_text = rating_tag.get_text(strip=True)
         # extract only digits
@@ -329,7 +366,7 @@ def scrape_futbin_player(href):
         "stats": all_stats
     }
 
-# Sales
+# ========== Prices ==========
 
 # Scrape Live Hourly Prices
 async def fetch_sales(session, url):
@@ -345,68 +382,54 @@ def parse_sales(html):
         sales_table = soup.find("tbody")
         if sales_table is None:
             print(f"No sales table found")
-            return []  # or handle gracefully
+            return []
 
         sales_data = []
+        uk = pytz.timezone("Europe/London")
+        adelaide = pytz.timezone("Australia/Adelaide")
+        cutoff = adelaide.localize(datetime.datetime(2024, 1, 1))
 
         for row in sales_table.find_all("tr"):
             cols = row.find_all("td")
 
-            # Get date/time
+            # Parse date/time
             date_span = cols[0].find("span", class_="sales-date-time")
             sale_time_str = date_span.get_text(strip=True) if date_span else None
-
-            # Parse string into datetime
             if sale_time_str:
-                sale_time = datetime.datetime.strptime(sale_time_str, "%b %d, %I:%M %p")
-                # Add current year if needed
-                sale_time = sale_time.replace(year=datetime.datetime.now().year)
+                naive_dt = datetime.datetime.strptime(sale_time_str, "%b %d, %I:%M %p")
+                naive_dt = naive_dt.replace(year=datetime.datetime.now().year)
+                uk_dt = uk.localize(naive_dt)           # make it aware
+                adelaide_dt = uk_dt.astimezone(adelaide)
             else:
-                sale_time = None
+                adelaide_dt = None
 
-            # Get price (assuming second td)
+            # Parse prices
             price_text = cols[1].get_text(strip=True)
             price = int(price_text.replace(",", "")) if price_text else None
-            
 
-            # Other columns (optional)
             sold_price_text = cols[2].get_text(strip=True)
             try:
                 sold_price = int(sold_price_text.replace(",", "")) if sold_price_text else 0
             except ValueError:
                 sold_price = 0
 
-            # Extract Bid / other text from last column
+            # Sale type
             type_div = cols[5].find("div", class_="inline-popup-content")
             sale_type = type_div.get_text(strip=True) if type_div else None
 
-            sales_data.append({
-                "sale_time": sale_time,
-                "listed_price": sold_price,
-                "sold_price": sold_price,
-                "sale_type": "Buy Now"
-            })
+            if adelaide_dt and adelaide_dt >= cutoff:
+                sales_data.append({
+                    "sale_time": adelaide_dt,  # now fully aware datetime
+                    "listed_price": price,
+                    "sold_price": sold_price,
+                    "sale_type": sale_type
+                })
 
-        uk = pytz.timezone("Europe/London")
-        adelaide = pytz.timezone("Australia/Adelaide")
-        cutoff = datetime.datetime(2024, 1, 1, tzinfo=adelaide)
-
-        filtered_data = []
-        for item in sales_data:
-            if item['sale_time']:
-                # Localize as UK time
-                uk_dt = uk.localize(item['sale_time'])
-                # Convert to Adelaide
-                adelaide_dt = uk_dt.astimezone(adelaide)
-                if adelaide_dt >= cutoff:
-                    item['sale_time'] = adelaide_dt.isoformat()
-                    filtered_data.append(item)
-
-        sales_data = filtered_data
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error parsing sales: {e}")
 
     return sales_data
+
 
 
 async def get_sales(sales_href):
@@ -428,3 +451,4 @@ async def get_sales(sales_href):
             sales_by_platform[platform] = []
 
     return sales_by_platform
+
