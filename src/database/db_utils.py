@@ -1,5 +1,6 @@
 import pymysql
 import pandas as pd
+import json
 from dotenv import load_dotenv
 import os
 import asyncio
@@ -218,7 +219,66 @@ def insert_card_stats(card_id, stats_list):
         conn.close()
 
 
+def get_or_create_user(discord_id, display_name):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (display_name, discord_id, notify_channel, notify_target)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE user_id = LAST_INSERT_ID(user_id)
+                """,
+                (display_name, str(discord_id), "discord_dm", str(discord_id))
+            )
+            conn.commit()
+            return cur.lastrowid
+    finally:
+        conn.close()
+
+def insert_position(user_id, card_id, buy_price, buy_time, quantity=1, target_price_low=None,
+                     target_price_high=None, expected_hold_hours=None, event_state_at_entry=None):
+    """Open a new position (a buy of `quantity` copies at `buy_price` each). Returns the new position_id."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO positions (
+                    user_id, card_id, quantity, buy_price, buy_time,
+                    target_price_low, target_price_high, expected_hold_hours, event_state_at_entry
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id,
+                card_id,
+                quantity,
+                buy_price,
+                buy_time,
+                target_price_low,
+                target_price_high,
+                expected_hold_hours,
+                json.dumps(event_state_at_entry) if event_state_at_entry is not None else None
+            ))
+            position_id = cur.lastrowid
+        conn.commit()
+        return position_id
+    finally:
+        conn.close()
+
+
 # ------------------- DATA FETCHING -------------------
+
+def fetch_cards():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_id, name, version, rating FROM cards
+            """)
+            rows = cur.fetchall()
+            return rows
+    finally:
+        conn.close()
+
 
 def fetch_meta_hrefs(version, min_price=5000):
     conn = get_connection()
@@ -285,7 +345,7 @@ def fetch_icon_fluctuations(platform="pc"):
     finally:
         conn.close()
 
-fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
+# fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
 
 
 # ------------------- DATA DROPPING -------------------
@@ -301,6 +361,3 @@ def drop_all_tables():
     cur.close()
     conn.close()
     print("All tables dropped.")
-
-# drop_all_tables()
-# initcardTable()

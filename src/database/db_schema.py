@@ -215,6 +215,7 @@ def initcardTable():
             user_id INT NOT NULL,
             card_id INT NOT NULL,
 
+            quantity INT NOT NULL DEFAULT 1,
             buy_price INT NOT NULL,
             buy_time DATETIME NOT NULL,
 
@@ -228,9 +229,11 @@ def initcardTable():
             sell_time DATETIME,
             exit_reason VARCHAR(50),
 
+            -- buy_price/sell_price are per-unit (each market_sales row is one card);
+            -- realized_profit is the total across all units in this position.
             realized_profit INT AS (
                 CASE WHEN sell_price IS NOT NULL
-                     THEN ROUND(sell_price * 0.95) - buy_price
+                     THEN (ROUND(sell_price * 0.95) - buy_price) * quantity
                      ELSE NULL END
             ) STORED,
 

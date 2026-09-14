@@ -9,6 +9,7 @@ no defer() option, so a live query per character is too risky to rely on.
 import re
 import threading
 from rapidfuzz import process, fuzz
+from src.database.db_utils import fetch_cards
 
 # Each row: (card_id, name, version, rating, display_label). Rating is
 # included in the label so two cards that share a name and version but
@@ -24,7 +25,7 @@ _cache_lock = threading.Lock()
 _NUMERIC_RE = re.compile(r"\d+")
 
 
-def refresh_card_cache(conn):
+def refresh_card_cache():
     """
     Reload the in-memory card cache from the DB.
 
@@ -33,10 +34,7 @@ def refresh_card_cache(conn):
     call, so from async code run it via asyncio.to_thread(refresh_card_cache, conn).
     """
     global _card_cache, _names, _versions, _ratings
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT card_id, name, version, rating FROM cards")
-        rows = cur.fetchall()
+    rows = fetch_cards()
 
     new_cache = [
         (
