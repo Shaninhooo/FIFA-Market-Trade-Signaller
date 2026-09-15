@@ -8,7 +8,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs
 
 BASE_URL = "https://www.futbin.com"
 HEADERS = {
@@ -21,6 +21,7 @@ HEADERS = {
 def extract_card_id(href: str) -> int | None:
     match = re.search(r"/player/(\d+)/", href)
     return int(match.group(1)) if match else None
+
 
 def collect_all_hrefs(version):
     hrefs = set()
@@ -36,7 +37,7 @@ def collect_all_hrefs(version):
     page_num = 1
 
     while True:
-        url = f"{BASE_URL}/26/players?page={page_num}&version={version}"
+        url = f"{BASE_URL}/27/players?page={page_num}"
         print(f"[Page {page_num}] Fetching {url}")
 
         response = requests.get(url, headers=HEADERS)
@@ -48,7 +49,7 @@ def collect_all_hrefs(version):
         rows = soup.find_all("tr", class_="player-row")
 
         # Stop only when page has no rows at all
-        if not rows:
+        if not rows or page_num==100:
             print(f"No player rows found, stopping at page {page_num}")
             break
 
@@ -95,30 +96,82 @@ def collect_all_hrefs(version):
     return list(hrefs)
 
 
-
-
-def load_meta_hrefs(version, min_price=5000):
+def scrape_hrefs():
+    hrefs = set()
+    new_hrefs = 0
     conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT c.href
-                FROM hrefs c
-                LEFT JOIN market_sales ms ON c.card_id = ms.card_id
-                WHERE c.version = %s
-                  AND (ms.sold_price > %s OR ms.sold_price IS NULL);
-            """, (version, min_price))
-            rows = cur.fetchall()
-            return [row['href'] for row in rows]
-    finally:
-        conn.close()
+
+    # Load existing hrefs from DB
+    with conn.cursor() as cur:
+        cur.execute("SELECT href FROM hrefs")
+        for row in cur.fetchall():
+            hrefs.add(row['href'])
+
+    page_num = 1
+
+    while True:
+        url = f"{BASE_URL}/27/players?page={page_num}"
+        print(f"[Page {page_num}] Fetching {url}")
+
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code != 200:
+            print(f"Failed to fetch page {page_num}")
+            break
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        rows = soup.find_all("tr", class_="player-row")
+
+        # Stop only when page has no rows at all
+        if not rows or page_num==100:
+            print(f"No player rows found, stopping at page {page_num}")
+            break
+
+        page_new_hrefs = 0
+        new_entries = []
+
+        for row in rows:
+            name_tag = row.find("a", class_="table-player-name")
+            if name_tag and "href" in name_tag.attrs:
+                href = name_tag["href"]
+                card_id = extract_card_id(href)
+
+                if href not in hrefs:
+                    hrefs.add(href)
+                    page_new_hrefs += 1
+                    new_hrefs += 1
+                    new_entries.append((card_id, href))
+
+        # Bulk insert new hrefs into DB
+        if new_entries:
+            with conn.cursor() as cur:
+                cur.executemany("""
+                    INSERT INTO hrefs (card_id, href)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE card_id=card_id;
+                """, new_entries)
+            conn.commit()
+
+        print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
+        page_num += 1
+
+    print(f"Collected {new_hrefs} new hrefs in total.")
+    conn.close()
+    return list(hrefs)
 
 
+async def scrape_players_stats():
 
-async def scrape_fc26_players(version):
+    hrefs = set()
+    conn = get_connection()
 
     # Load hrefs
-    hrefs = load_meta_hrefs(version)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT href FROM hrefs")
+            for row in cur.fetchall():
+                hrefs.add(row['href'])
+    finally:
+        conn.close()
     print(f"Loaded {len(hrefs)} hrefs.")
 
     sem = asyncio.Semaphore(2)  # concurrency limit
@@ -142,13 +195,68 @@ async def scrape_fc26_players(version):
 
                 if not metadata_exists:
                     # Scrape full metadata
-                    metadata = await asyncio.to_thread(scrape_futbin_player, href)
+                    metadata = await asyncio.to_thread(scrape_player, href)
                     if not metadata:
                         print(f"Skipped player {href} because metadata could not be scraped")
                         return None
 
                     # Insert metadata into DB
-                    insert_card(card_id, metadata["details"], "26")
+                    insert_card(card_id, metadata["details"], "27")
+                    insert_card_stats(card_id, metadata["stats"])
+                    insert_card_roles(card_id, metadata["roles"])
+                    insert_card_playstyles(card_id, metadata["playstyles"])
+                else:
+                    print(f"Metadata already exists for player {card_id}, skipping scraping")
+                    metadata = None  # we don't need metadata for printing
+
+                return card_id
+
+            except Exception as e:
+                print(f"Error scraping {href}: {e}")
+                return None
+
+    tasks = [process_player(href) for href in hrefs]
+    for coro in asyncio.as_completed(tasks):
+        await coro
+
+    return
+
+
+async def scrape_players(version):
+
+    # Load hrefs
+    hrefs = fetch_meta_hrefs(version)
+    print(f"Loaded {len(hrefs)} hrefs.")
+
+    sem = asyncio.Semaphore(2)  # concurrency limit
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    async def process_player(href, session):
+        async with sem:
+            await asyncio.sleep(random.uniform(0.5,2))
+            try:
+                # Extract card_id from href
+                card_id = int(href.split("/")[3])
+
+                # Check if metadata already exists in DB
+                conn = get_connection()
+                metadata_exists = False
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM cards WHERE card_id=%s LIMIT 1", (card_id,))
+                        metadata_exists = cur.fetchone() is not None
+                finally:
+                    conn.close()
+
+                if not metadata_exists:
+                    # Scrape full metadata
+                    metadata = await asyncio.to_thread(scrape_player, href)
+                    if not metadata:
+                        print(f"Skipped player {href} because metadata could not be scraped")
+                        return None
+
+                    # Insert metadata into DB
+                    insert_card(card_id, metadata["details"], "27")
                     insert_card_stats(card_id, metadata["stats"])
                     insert_card_roles(card_id, metadata["roles"])
                     insert_card_playstyles(card_id, metadata["playstyles"])
@@ -158,7 +266,7 @@ async def scrape_fc26_players(version):
 
                 # Always scrape market sales
                 sales_href = href.replace("player", "sales")
-                sales = await get_sales(sales_href)
+                sales = await get_sales(sales_href, session)
                 all_prices = []
                 for platform, s in sales.items():
                     for sale in s:
@@ -174,9 +282,10 @@ async def scrape_fc26_players(version):
                 print(f"Error scraping {href}: {e}")
                 return None
 
-    tasks = [process_player(href) for href in hrefs]
-    for coro in asyncio.as_completed(tasks):
-        await coro
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        tasks = [process_player(href, session) for href in hrefs]
+        for coro in asyncio.as_completed(tasks):
+            await coro
 
     return
 
@@ -194,7 +303,7 @@ def normalize_column(stat_name: str) -> str:
     return stat_name
 
 # Scrapes Specific Futbin Player Metadata
-def scrape_futbin_player(href):
+def scrape_player(href):
 
     url = f"https://www.futbin.com{href}"
     response = requests.get(url, headers=HEADERS)
@@ -220,7 +329,7 @@ def scrape_futbin_player(href):
                 name = unidecode(name_div.text.strip())
 
     # Get Player Rating
-    rating_tag = player_card.select_one("div.playercard-26-rating")
+    rating_tag = player_card.select_one("div.playercard-27-rating")
     if rating_tag:
         rating_text = rating_tag.get_text(strip=True)
         # extract only digits
@@ -372,11 +481,15 @@ def scrape_futbin_player(href):
 async def fetch_sales(session, url):
     """Fetch page content asynchronously."""
     async with session.get(url, headers=HEADERS) as resp:
+        if resp.status != 200:
+            print(f"Failed to fetch sales page {url} (status {resp.status})")
+            return None
         return await resp.text()
 
 
 
 def parse_sales(html):
+    sales_data = []
     try:
         soup = BeautifulSoup(html, "html.parser")
         sales_table = soup.find("tbody")
@@ -384,20 +497,24 @@ def parse_sales(html):
             print(f"No sales table found")
             return []
 
-        sales_data = []
         uk = pytz.timezone("Europe/London")
         adelaide = pytz.timezone("Australia/Adelaide")
         cutoff = adelaide.localize(datetime.datetime(2024, 1, 1))
+        now = datetime.datetime.now()
 
         for row in sales_table.find_all("tr"):
             cols = row.find_all("td")
+            if len(cols) < 6:
+                continue
 
             # Parse date/time
             date_span = cols[0].find("span", class_="sales-date-time")
             sale_time_str = date_span.get_text(strip=True) if date_span else None
             if sale_time_str:
                 naive_dt = datetime.datetime.strptime(sale_time_str, "%b %d, %I:%M %p")
-                naive_dt = naive_dt.replace(year=datetime.datetime.now().year)
+                # Sales scraped in January can still be dated in the prior December
+                year = now.year - 1 if naive_dt.month == 12 and now.month == 1 else now.year
+                naive_dt = naive_dt.replace(year=year)
                 uk_dt = uk.localize(naive_dt)           # make it aware
                 adelaide_dt = uk_dt.astimezone(adelaide)
             else:
@@ -432,15 +549,14 @@ def parse_sales(html):
 
 
 
-async def get_sales(sales_href):
+async def get_sales(sales_href, session):
     platforms = ["pc", "ps"]
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for platform in platforms:
-            url = f"{BASE_URL}{sales_href}?platform={platform}"
-            tasks.append(fetch_sales(session, url))
+    tasks = []
+    for platform in platforms:
+        url = f"{BASE_URL}{sales_href}?platform={platform}"
+        tasks.append(fetch_sales(session, url))
 
-        html_results = await asyncio.gather(*tasks, return_exceptions=True)
+    html_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Parse HTML for each platform
     sales_by_platform = {}
@@ -452,3 +568,12 @@ async def get_sales(sales_href):
 
     return sales_by_platform
 
+
+# Execute Hourly Scrape
+async def hourly_scrape():
+
+    # Get all card versions
+    versions = ["gold_rare", "base_icon"]
+    for version in versions:
+            collect_all_hrefs(version)  # synchronous
+            await scrape_players(version)  # async
