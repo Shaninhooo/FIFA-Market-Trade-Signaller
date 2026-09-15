@@ -1,7 +1,7 @@
 import discord
 import pymysql
 from src.notifier.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, fetch_open_positions, fetch_closed_positions, close_position
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
 from discord import app_commands
 import os
 import asyncio
@@ -200,3 +200,29 @@ async def positions(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+@tree.command(name="flex", description="See your total realised profit", guild=GUILD_ID)
+async def positions(interaction: discord.Interaction):
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    profit = await asyncio.to_thread(fetch_total_profit, user_id)
+
+    embed = discord.Embed(title="Your Total Profit", color=discord.Color.blurple())
+
+    if profit < 0:
+        name="😬 YIKES! Are you trying to lose coins?"
+    elif 0 < profit < 50000:
+        name="🥱 Not bad still room to improve though"
+    else:
+        name="🤯 Your a real trader keep going!"
+
+    embed.add_field(
+        name=f"{name}",
+        value=(
+            f"Realised Profit: {profit}\n"
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+    

@@ -315,6 +315,25 @@ def fetch_cards():
         conn.close()
 
 
+def fetch_total_profit(user_id):
+    """Aggregate profit/trade stats for a user, via the user_profit_summary view."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    total_realized_profit,
+                    closed_trades,
+                    open_positions,
+                    avg_profit_per_win,
+                    stop_loss_count
+                FROM user_profit_summary
+                WHERE user_id = %s
+            """, (user_id,))
+            return cur.fetchone()
+    finally:
+        conn.close()
+
 def fetch_open_positions(user_id, limit=10):
     """Most recent open positions for a user, newest first."""
     conn = get_connection()
