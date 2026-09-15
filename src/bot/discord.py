@@ -1,6 +1,6 @@
 import discord
 import pymysql
-from src.notifier.card_cache import search_cards_fuzzy, refresh_card_cache
+from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
 from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
 from discord import app_commands
 import os

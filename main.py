@@ -1,10 +1,10 @@
 import discord
-from src.data_scraping.scraper import hourly_scrape
+from src.scraper import hourly_scrape
 from src.database.db_schema import initcardTable
-from src.deal_finder.deal_finder import drop_strategy, icon_fluctuation_strategy
-from src.notifier.discord import client, DISCORD_TOKEN, GUILD_ID
+from src.strategy.deal_finder import drop_strategy, icon_fluctuation_strategy
+from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
-from src.notifier.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions
+from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions
 import asyncio
 
 SCRAPE_INTERVAL_SECONDS = 3600

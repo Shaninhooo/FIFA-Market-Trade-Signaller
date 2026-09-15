@@ -1,5 +1,5 @@
-from src.notifier.discord import send_message, get_or_create_tracker_channel
-from src.position_tracker.position_tracker import check_positions
+from src.bot.discord import send_message, get_or_create_tracker_channel
+from src.strategy.position_tracker import check_positions
 
 # Send Message on Discord of all the Best Found Drop Deals
 def notify_drop_deals(buy_df, plat):

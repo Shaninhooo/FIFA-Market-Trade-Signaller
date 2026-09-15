@@ -508,6 +508,32 @@ def fetch_card_trades(card_id, platform):
         conn.close()
 
 
+def fetch_market_index_sample(platform, short_hours, long_hours, min_price, sample_min_sales):
+    """Per-card short/long average sale price and sample size, for the market-wide
+    index in market_index.py. One row per card that clears the liquidity bar."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # One row per card, short/long averages computed in SQL rather than
+            # pulling every raw sale into Python - stays cheap as card count grows.
+            cur.execute("""
+                SELECT card_id,
+                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS short_avg,
+                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS long_avg,
+                       COUNT(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN 1 END) AS short_n,
+                       COUNT(*) AS long_n
+                FROM market_sales
+                WHERE platform = %s AND sold_price > %s
+                  AND sale_time > NOW() - INTERVAL %s HOUR
+                GROUP BY card_id
+                HAVING short_n >= %s AND long_n >= %s
+            """, (short_hours, long_hours, short_hours, platform, min_price,
+                  long_hours, sample_min_sales, sample_min_sales * 2))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 # fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
 
 
