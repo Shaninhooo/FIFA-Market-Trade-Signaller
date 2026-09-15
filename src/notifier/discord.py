@@ -201,24 +201,25 @@ async def positions(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="flex", description="See your total realised profit", guild=GUILD_ID)
-async def positions(interaction: discord.Interaction):
+async def flex(interaction: discord.Interaction):
     user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
-    profit = await asyncio.to_thread(fetch_total_profit, user_id)
+    stats = await asyncio.to_thread(fetch_total_profit, user_id)
+    profit = stats["total_realized_profit"] if stats else 0
 
     embed = discord.Embed(title="Your Total Profit", color=discord.Color.blurple())
 
     if profit < 0:
-        name="😬 YIKES! Are you trying to lose coins?"
-    elif 0 < profit < 50000:
-        name="🥱 Not bad still room to improve though"
+        name = "😬 YIKES! Are you trying to lose coins?"
+    elif profit == 0:
+        name = "🌱 Nothing realised yet - go make a trade!"
+    elif profit < 50000:
+        name = "🥱 Not bad, still room to improve though"
     else:
-        name="🤯 Your a real trader keep going!"
+        name = "🤯 You're a real trader, keep going!"
 
     embed.add_field(
-        name=f"{name}",
-        value=(
-            f"Realised Profit: {profit}\n"
-        ),
+        name=name,
+        value=f"Realised Profit: {profit:,}\n",
         inline=False
     )
 
