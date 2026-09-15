@@ -1,7 +1,7 @@
 import discord
 import pymysql
 from src.notifier.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, fetch_open_positions, fetch_closed_positions, close_position
 from discord import app_commands
 import os
 import asyncio
@@ -105,16 +105,98 @@ async def card_autocomplete(interaction: discord.Interaction, current: str):
  
  
 @tree.command(name="positions", description="List your open positions", guild=GUILD_ID)
-async def positions(interaction: discord.Interaction):
-    # TODO: query positions WHERE user_id = ... AND status = 'open'
-    await interaction.response.send_message("You have no open positions yet.", ephemeral=True)
+async def list_positions(interaction: discord.Interaction):
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    rows = await asyncio.to_thread(fetch_open_positions, user_id)
 
-@tree.command(name="sell", description="Sell your positions", guild=GUILD_ID)
-async def positions(interaction: discord.Interaction):
-    # TODO: query positions WHERE user_id = ... AND status = 'open'
-    await interaction.response.send_message("You have no open positions yet.", ephemeral=True)
- 
+    if not rows:
+        await interaction.response.send_message("You have no open positions yet.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="Your Open Positions", color=discord.Color.blurple())
+    for row in rows:
+        if row["target_price_low"] and row["target_price_high"]:
+            target = f"{row['target_price_low']:,} - {row['target_price_high']:,}"
+        else:
+            target = "—"
+
+        embed.add_field(
+            name=f"{row['name']} ({row['version']})",
+            value=(
+                f"Qty: {row['quantity']} @ {row['buy_price']:,}\n"
+                f"Target: {target}\n"
+                f"Bought: {row['buy_time'].strftime('%Y-%m-%d %H:%M UTC')}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="sell", description="Sell one of your open positions", guild=GUILD_ID)
+@app_commands.describe(position="Position to sell", sell_price="Price you sold for")
+async def sell(interaction: discord.Interaction, position: str, sell_price: int):
+    try:
+        position_id = int(position)
+    except ValueError:
+        await interaction.response.send_message(
+            "Please pick a position from the autocomplete list.", ephemeral=True
+        )
+        return
+
+    if sell_price <= 0:
+        await interaction.response.send_message("Sell price must be positive.", ephemeral=True)
+        return
+
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    sell_time = datetime.now(timezone.utc)
+
+    closed = await asyncio.to_thread(close_position, user_id, position_id, sell_price, sell_time)
+    if not closed:
+        await interaction.response.send_message(
+            "Couldn't find that open position - please pick one from the autocomplete list.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"Closed position for {sell_price:,} coins.", ephemeral=True
+    )
+
+@sell.autocomplete("position")
+async def position_autocomplete(interaction: discord.Interaction, current: str):
+    user_id = await asyncio.to_thread(get_user_id, interaction.user.id)
+    if user_id is None:
+        return []
+
+    rows = await asyncio.to_thread(fetch_open_positions, user_id, 25)
+    current = current.lower()
+    choices = []
+    for row in rows:
+        label = f"{row['name']} ({row['version']}) x{row['quantity']} @ {row['buy_price']:,}"
+        if current and current not in label.lower():
+            continue
+        choices.append(app_commands.Choice(name=label[:100], value=str(row["position_id"])))
+    return choices
+
 @tree.command(name="history", description="List your recent trade history", guild=GUILD_ID)
 async def positions(interaction: discord.Interaction):
-    # TODO: query positions WHERE user_id = ... AND status = 'open'
-    await interaction.response.send_message("You have no open positions yet.", ephemeral=True)
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    rows = await asyncio.to_thread(fetch_closed_positions, user_id)
+
+    if not rows:
+        await interaction.response.send_message("You have no closed yet.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="Your Closed Positions", color=discord.Color.blurple())
+    for row in rows:
+        embed.add_field(
+            name=f"{row['name']} ({row['version']})",
+            value=(
+                f"Qty: {row['quantity']}, {row['buy_price']:,} @ {row['sell_price']:,}\n"
+                f"Realised Profit: {row["realized_profit"]}\n"
+                f"Sold: {row['sell_time'].strftime('%Y-%m-%d %H:%M UTC')}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+

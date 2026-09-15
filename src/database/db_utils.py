@@ -219,6 +219,18 @@ def insert_card_stats(card_id, stats_list):
         conn.close()
 
 
+def get_user_id(discord_id):
+    """Look up an existing user's id by their Discord id. Returns None if they don't exist yet."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users WHERE discord_id = %s", (str(discord_id),))
+            row = cur.fetchone()
+            return row["user_id"] if row else None
+    finally:
+        conn.close()
+
+
 def get_or_create_user(discord_id, display_name):
     conn = get_connection()
     try:
@@ -264,6 +276,29 @@ def insert_position(user_id, card_id, buy_price, buy_time, quantity=1, target_pr
     finally:
         conn.close()
 
+def close_position(user_id, position_id, sell_price, sell_time, exit_reason='manual', status='sold'):
+    """Close an open position (a sell). Returns True if it was closed, False if there was
+    no matching open position (wrong user, wrong id, or already closed)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE positions
+                SET sell_price = %s,
+                    sell_time = %s,
+                    exit_reason = %s,
+                    status = %s
+                WHERE position_id = %s
+                  AND user_id = %s
+                  AND status = 'open'
+            """, (sell_price, sell_time, exit_reason, status, position_id, user_id))
+            updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
 
 # ------------------- DATA FETCHING -------------------
 
@@ -276,6 +311,59 @@ def fetch_cards():
             """)
             rows = cur.fetchall()
             return rows
+    finally:
+        conn.close()
+
+
+def fetch_open_positions(user_id, limit=10):
+    """Most recent open positions for a user, newest first."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    p.position_id,
+                    p.card_id,
+                    c.name,
+                    c.version,
+                    p.quantity,
+                    p.buy_price,
+                    p.buy_time,
+                    p.target_price_low,
+                    p.target_price_high
+                FROM positions p
+                JOIN cards c ON c.card_id = p.card_id
+                WHERE p.user_id = %s AND p.status = 'open'
+                ORDER BY p.buy_time DESC
+                LIMIT %s
+            """, (user_id, limit))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+def fetch_closed_positions(user_id, limit=10):
+    """Most recent closed positions for a user, newest first."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    p.position_id,
+                    p.card_id,
+                    c.name,
+                    c.version,
+                    p.quantity,
+                    p.buy_price,
+                    p.sell_price,
+                    p.sell_time,
+                    p.realized_profit
+                FROM positions p
+                JOIN cards c ON c.card_id = p.card_id
+                WHERE p.user_id = %s AND p.status IN ('sold', 'stopped_out')
+                ORDER BY p.sell_time DESC
+                LIMIT %s
+            """, (user_id, limit))
+            return cur.fetchall()
     finally:
         conn.close()
 
@@ -346,6 +434,7 @@ def fetch_icon_fluctuations(platform="pc"):
         conn.close()
 
 # fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
+
 
 
 # ------------------- DATA DROPPING -------------------
