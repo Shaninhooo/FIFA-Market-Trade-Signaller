@@ -219,7 +219,7 @@ async def flex(interaction: discord.Interaction):
 
     embed.add_field(
         name=name,
-        value=f"Realised Profit: {profit:,}\n",
+        value=f"Total Realised Profit: {profit:,}\n",
         inline=False
     )
 
