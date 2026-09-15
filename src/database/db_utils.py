@@ -248,6 +248,37 @@ def get_or_create_user(discord_id, display_name):
     finally:
         conn.close()
 
+
+def set_user_platform(discord_id, platform):
+    """Set the platform ('pc' or 'ps') a user trades on. Returns True if a user was updated."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET platform = %s WHERE discord_id = %s",
+                (platform, str(discord_id))
+            )
+            updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def fetch_trackable_users():
+    """All users who have signed up with a platform, for the position tracker sweep."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT user_id, discord_id, platform
+                FROM users
+                WHERE platform IS NOT NULL
+            """)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
 def insert_position(user_id, card_id, buy_price, buy_time, quantity=1, target_price_low=None,
                      target_price_high=None, expected_hold_hours=None, event_state_at_entry=None):
     """Open a new position (a buy of `quantity` copies at `buy_price` each). Returns the new position_id."""
@@ -451,6 +482,57 @@ def fetch_icon_fluctuations(platform="pc"):
             return pd.DataFrame(cur.fetchall())
     finally:
         conn.close()
+
+def fetch_card_trades(card_id, platform):
+    """Fetch card trade history"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    ms.sale_time,
+                    ms.sold_price,
+                    ms.platform
+                FROM market_sales ms
+                JOIN cards c ON ms.card_id = c.card_id
+                WHERE ms.card_id = %s
+                  AND ms.sold_price > 0
+                  AND ms.platform = %s
+                  AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
+            """, (card_id, platform))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def fetch_market_index_sample(platform, short_hours, long_hours, min_price, sample_min_sales):
+    """Per-card short/long average sale price and sample size, for the market-wide
+    index in market_index.py. One row per card that clears the liquidity bar."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # One row per card, short/long averages computed in SQL rather than
+            # pulling every raw sale into Python - stays cheap as card count grows.
+            cur.execute("""
+                SELECT card_id,
+                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS short_avg,
+                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS long_avg,
+                       COUNT(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN 1 END) AS short_n,
+                       COUNT(*) AS long_n
+                FROM market_sales
+                WHERE platform = %s AND sold_price > %s
+                  AND sale_time > NOW() - INTERVAL %s HOUR
+                GROUP BY card_id
+                HAVING short_n >= %s AND long_n >= %s
+            """, (short_hours, long_hours, short_hours, platform, min_price,
+                  long_hours, sample_min_sales, sample_min_sales * 2))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
 
 # fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
 

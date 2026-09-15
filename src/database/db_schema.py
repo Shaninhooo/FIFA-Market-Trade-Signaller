@@ -193,6 +193,7 @@ def initcardTable():
             discord_id VARCHAR(30) UNIQUE,
             notify_channel VARCHAR(20) NOT NULL,
             notify_target VARCHAR(255) NOT NULL,
+            platform ENUM('pc', 'ps') DEFAULT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)

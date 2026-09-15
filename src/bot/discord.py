@@ -1,7 +1,7 @@
 import discord
 import pymysql
-from src.notifier.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
+from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
 from discord import app_commands
 import os
 import asyncio
@@ -41,7 +41,7 @@ def send_message(message: str, version):
 
 
 async def get_or_create_tracker_channel(guild, user, category):
-    existing = discord.utils.get(guild.text_channels, name=f"trades-{user.name}".lower())
+    existing = discord.utils.get(guild.text_channels, name=f"position-tracker-{user.name}".lower())
     if existing:
         return existing
     overwrites = {
@@ -65,8 +65,14 @@ async def ping(interaction: discord.Interaction):
 
 
 @tree.command(name="create_tracker", description="Sign up for position tracker that checks your positions and notifies you for sell opportunities", guild=GUILD_ID)
-async def create_tracker(interaction: discord.Interaction):
+@app_commands.describe(platform="Which platform you trade on")
+@app_commands.choices(platform=[
+    app_commands.Choice(name="PC", value="pc"),
+    app_commands.Choice(name="PlayStation", value="ps"),
+])
+async def create_tracker(interaction: discord.Interaction, platform: app_commands.Choice[str]):
     await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    await asyncio.to_thread(set_user_platform, interaction.user.id, platform.value)
 
     try:
         channel = await get_or_create_tracker_channel(interaction.guild, interaction.user, category=None)

@@ -1,4 +1,5 @@
-from src.notifier.discord import send_message
+from src.bot.discord import send_message, get_or_create_tracker_channel
+from src.strategy.position_tracker import check_positions
 
 # Send Message on Discord of all the Best Found Drop Deals
 def notify_drop_deals(buy_df, plat):
@@ -33,3 +34,14 @@ def notify_icon_fluctuations(fluctuation_df, plat):
             send_message(msg)
     else:
         send_message(f"**No icon fluctuation candidates found this hour on {plat.upper()}.**")
+
+
+async def notify_positions(guild, member, user_id, platform):
+    """Check a user's open positions and, if any are worth selling, post one
+    summary embed into their private tracker channel."""
+    embed = check_positions(user_id, platform)
+    if embed is None:
+        return
+
+    channel = await get_or_create_tracker_channel(guild, member, category=None)
+    await channel.send(embed=embed)
