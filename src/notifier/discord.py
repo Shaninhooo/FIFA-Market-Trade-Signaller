@@ -45,8 +45,8 @@ async def get_or_create_tracker_channel(guild, user, category):
     if existing:
         return existing
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
-        user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        user: discord.PermissionOverwrite(view_channel=True, send_messages=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
     channel = await guild.create_text_channel(f"position-tracker-{user.name}", overwrites=overwrites, category=category)
