@@ -49,7 +49,7 @@ async def get_or_create_tracker_channel(guild, user, category):
         user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
-    channel = await guild.create_text_channel(f"trades-{user.name}", overwrites=overwrites, category=category)
+    channel = await guild.create_text_channel(f"position-tracker-{user.name}", overwrites=overwrites, category=category)
     return channel
 
 
@@ -63,6 +63,23 @@ async def get_or_create_tracker_channel(guild, user, category):
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("pong", ephemeral=True)
 
+
+@tree.command(name="create_tracker", description="Sign up for position tracker that checks your positions and notifies you for sell opportunities", guild=GUILD_ID)
+async def create_tracker(interaction: discord.Interaction):
+    await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+
+    try:
+        channel = await get_or_create_tracker_channel(interaction.guild, interaction.user, category=None)
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "I don't have permission to create channels here - ask a server admin to grant me Manage Channels.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"You're all set - your tracker channel is {channel.mention}.", ephemeral=True
+    )
 
 # Buy Command
 @tree.command(name="buy", description="Log a buy you made on the market", guild=GUILD_ID)
