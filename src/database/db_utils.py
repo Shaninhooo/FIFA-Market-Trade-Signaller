@@ -248,6 +248,37 @@ def get_or_create_user(discord_id, display_name):
     finally:
         conn.close()
 
+
+def set_user_platform(discord_id, platform):
+    """Set the platform ('pc' or 'ps') a user trades on. Returns True if a user was updated."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET platform = %s WHERE discord_id = %s",
+                (platform, str(discord_id))
+            )
+            updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def fetch_trackable_users():
+    """All users who have signed up with a platform, for the position tracker sweep."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT user_id, discord_id, platform
+                FROM users
+                WHERE platform IS NOT NULL
+            """)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
 def insert_position(user_id, card_id, buy_price, buy_time, quantity=1, target_price_low=None,
                      target_price_high=None, expected_hold_hours=None, event_state_at_entry=None):
     """Open a new position (a buy of `quantity` copies at `buy_price` each). Returns the new position_id."""
@@ -451,6 +482,31 @@ def fetch_icon_fluctuations(platform="pc"):
             return pd.DataFrame(cur.fetchall())
     finally:
         conn.close()
+
+def fetch_card_trades(card_id, platform):
+    """Fetch card trade history"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    ms.sale_time,
+                    ms.sold_price,
+                    ms.platform
+                FROM market_sales ms
+                JOIN cards c ON ms.card_id = c.card_id
+                WHERE ms.card_id = %s
+                  AND ms.sold_price > 0
+                  AND ms.platform = %s
+                  AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
+            """, (card_id, platform))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
 
 # fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
 
