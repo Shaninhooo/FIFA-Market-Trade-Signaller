@@ -62,7 +62,7 @@ async def main():
     initcardTable()
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
-        # hourly_loop(),
+        hourly_loop(),
     )
 
 if __name__=="__main__":
