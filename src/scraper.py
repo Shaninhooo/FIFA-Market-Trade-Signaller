@@ -573,7 +573,10 @@ async def get_sales(sales_href, session):
 async def main_scrape():
 
     # Get all card versions
-    versions = ["gold_rare", "base_icon", "team_of_the_week"]
+    versions = ["gold_rare"]
     for version in versions:
-            collect_all_hrefs(version)  # synchronous
+            # collect_all_hrefs(version)  # synchronous
             await scrape_players(version)  # async
+
+
+# , "base_icon", "team_of_the_week"
