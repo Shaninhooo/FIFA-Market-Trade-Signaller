@@ -503,6 +503,20 @@ def fetch_meta_hrefs(version, min_price=5000):
     finally:
         conn.close()
 
+def fetch_all_hrefs(version):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT href
+                FROM hrefs
+                WHERE version = %s
+            """, (version,))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
 def fetch_drop_candidates(platform="pc"):
     """Fetch raw sales in last 8 hours for dip detection"""
     conn = get_connection()
