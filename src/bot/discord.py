@@ -1,7 +1,7 @@
 import discord
 import pymysql
 from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard
 from discord import app_commands
 import os
 import asyncio
@@ -249,4 +249,42 @@ async def flex(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-    
+@tree.command(name="leaderboard_optin", description="Choose whether to appear on /leaderboard", guild=GUILD_ID)
+@app_commands.describe(share="Show your stats on the leaderboard?")
+async def leaderboard_optin(interaction: discord.Interaction, share: bool):
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    await asyncio.to_thread(set_share_stats, user_id, share)
+
+    if share:
+        await interaction.response.send_message("You're now visible on the leaderboard.", ephemeral=True)
+    else:
+        await interaction.response.send_message("You've been removed from the leaderboard.", ephemeral=True)
+
+
+@tree.command(name="leaderboard", description="See the top traders by realised profit", guild=GUILD_ID)
+async def leaderboard(interaction: discord.Interaction):
+    rows = await asyncio.to_thread(fetch_leaderboard)
+
+    if not rows:
+        await interaction.response.send_message(
+            "Nobody's opted in to the leaderboard yet - run /leaderboard_optin to be the first!",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    embed = discord.Embed(title="🏆 Leaderboard - Top Traders", color=discord.Color.gold())
+    for i, row in enumerate(rows):
+        rank = medals[i] if i < len(medals) else f"#{i + 1}"
+        avg_win = f"{row['avg_profit_per_win']:,}" if row["avg_profit_per_win"] is not None else "—"
+        embed.add_field(
+            name=f"{rank} {row['display_name']}",
+            value=(
+                f"Total Profit: {row['total_realized_profit']:,}\n"
+                f"Closed Trades: {row['closed_trades']}\n"
+                f"Avg Profit/Win: {avg_win}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)

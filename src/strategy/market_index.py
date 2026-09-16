@@ -16,17 +16,27 @@ from src.database.db_utils import fetch_market_index_sample
 
 
 def get_market_index_snapshot(platform="pc", short_hours=2, long_hours=8,
-                               min_price=20000, sample_min_sales=10):
+                               min_price=20000, sample_min_sales=10, card_type=None, as_of=None):
     """
     Builds a market-wide index from a broad basket of liquid, mid-to-high
     priced cards. Fodder is excluded via min_price - too noisy and not
     representative of the meta market you're actually trying to protect
     the signaller from misreading.
 
+    card_type: optional cards.version to restrict the basket to (e.g. "Gold Rare").
+    None (default) includes every version.
+
+    as_of: point in time to compute the snapshot for. Defaults to now (live use).
+    Passing a historical datetime computes what the index looked like at that
+    moment, mirroring get_market_snapshot's as_of support - critical so live and
+    backtest features are computed identically rather than by two separate
+    reimplementations that could subtly disagree.
+
     Returns the index's median short-vs-long % move, or None if there
     isn't enough breadth of liquid cards sampled to trust it yet.
     """
-    rows = fetch_market_index_sample(platform, short_hours, long_hours, min_price, sample_min_sales)
+    rows = fetch_market_index_sample(platform, short_hours, long_hours, min_price,
+                                      sample_min_sales, card_type, as_of)
 
     if len(rows) < 20:
         return None  # too few liquid cards sampled to trust a market-wide read yet
@@ -40,7 +50,7 @@ def get_market_index_snapshot(platform="pc", short_hours=2, long_hours=8,
     return {
         "median_change_pct": median_change_pct,
         "sample_size": len(pct_changes),
-        "computed_at": datetime.now(timezone.utc),
+        "computed_at": as_of or datetime.now(timezone.utc),
     }
 
 
