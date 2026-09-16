@@ -570,7 +570,7 @@ async def get_sales(sales_href, session):
 
 
 # Execute Hourly Scrape
-async def hourly_scrape():
+async def main_scrape():
 
     # Get all card versions
     versions = ["gold_rare", "base_icon", "team_of_the_week"]

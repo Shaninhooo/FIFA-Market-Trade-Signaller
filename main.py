@@ -1,5 +1,5 @@
 import discord
-from src.scraper import hourly_scrape
+from src.scraper import main_scrape
 from src.database.db_schema import initcardTable
 from src.strategy.deal_finder import drop_strategy, icon_fluctuation_strategy
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
@@ -38,7 +38,7 @@ async def hourly_loop():
         start = asyncio.get_event_loop().time()
         try:
             # Scrape Market Data Hourly
-            await hourly_scrape()
+            await main_scrape()
 
             # Then run market strategies and send deals
             # platforms = ["pc", "ps"]
@@ -62,7 +62,7 @@ async def main():
     initcardTable()
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
-        hourly_loop(),
+        main_scrape(),
     )
 
 if __name__=="__main__":
