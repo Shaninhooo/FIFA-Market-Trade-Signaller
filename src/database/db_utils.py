@@ -402,6 +402,38 @@ def fetch_leaderboard(limit=10):
         conn.close()
 
 
+def fetch_top_trades(days=7, limit=10):
+    """Best individual closed trades (by realized_profit) in the last `days` days,
+    among users who've opted in via share_stats. Ranks single trades, not per-user
+    totals - a different shape than fetch_leaderboard."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    u.display_name,
+                    c.name,
+                    c.version,
+                    p.quantity,
+                    p.buy_price,
+                    p.sell_price,
+                    p.realized_profit,
+                    p.sell_time
+                FROM positions p
+                JOIN users u ON u.user_id = p.user_id
+                JOIN cards c ON c.card_id = p.card_id
+                LEFT JOIN user_settings us ON us.user_id = p.user_id
+                WHERE p.status IN ('sold', 'stopped_out')
+                  AND p.sell_time >= NOW() - INTERVAL %s DAY
+                  AND us.share_stats = 1
+                ORDER BY p.realized_profit DESC
+                LIMIT %s
+            """, (days, limit))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def fetch_open_positions(user_id, limit=10):
     """Most recent open positions for a user, newest first."""
     conn = get_connection()

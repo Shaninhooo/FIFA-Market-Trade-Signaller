@@ -1,7 +1,7 @@
 import discord
 import pymysql
 from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard, fetch_top_trades
 from discord import app_commands
 import os
 import asyncio
@@ -283,6 +283,39 @@ async def leaderboard(interaction: discord.Interaction):
                 f"Total Profit: {row['total_realized_profit']:,}\n"
                 f"Closed Trades: {row['closed_trades']}\n"
                 f"Avg Profit/Win: {avg_win}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@tree.command(name="top_trades", description="See the best individual trades made recently", guild=GUILD_ID)
+@app_commands.describe(days="How many days back to look (default 7)")
+async def top_trades(interaction: discord.Interaction, days: int = 7):
+    if days <= 0:
+        await interaction.response.send_message("Days must be positive.", ephemeral=True)
+        return
+
+    rows = await asyncio.to_thread(fetch_top_trades, days)
+
+    if not rows:
+        await interaction.response.send_message(
+            "No qualifying trades in that window - either nobody's sold, or nobody's opted in via /leaderboard_optin.",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    embed = discord.Embed(title=f"💎 Top Trades - Last {days} Days", color=discord.Color.gold())
+    for i, row in enumerate(rows):
+        rank = medals[i] if i < len(medals) else f"#{i + 1}"
+        embed.add_field(
+            name=f"{rank} {row['name']} ({row['version']}) — {row['display_name']}",
+            value=(
+                f"Qty: {row['quantity']}, {row['buy_price']:,} → {row['sell_price']:,}\n"
+                f"Profit: {row['realized_profit']:,}\n"
+                f"Sold: {row['sell_time'].strftime('%Y-%m-%d %H:%M UTC')}"
             ),
             inline=False
         )
