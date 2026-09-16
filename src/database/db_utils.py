@@ -266,6 +266,19 @@ def set_user_platform(discord_id, platform):
         conn.close()
 
 
+def get_user_platform(discord_id):
+    """Look up a user's registered platform ('pc'/'ps'). Returns None if they
+    haven't set one via /create_tracker yet."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT platform FROM users WHERE discord_id = %s", (str(discord_id),))
+            row = cur.fetchone()
+            return row["platform"] if row else None
+    finally:
+        conn.close()
+
+
 def fetch_trackable_users():
     """All users who have signed up with a platform, for the position tracker sweep."""
     conn = get_connection()

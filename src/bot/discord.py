@@ -1,7 +1,8 @@
 import discord
 import pymysql
 from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard, fetch_top_trades
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, get_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard, fetch_top_trades
+from src.strategy.market_index import get_market_index_snapshot, is_crash_mode
 from discord import app_commands
 import os
 import asyncio
@@ -321,3 +322,47 @@ async def top_trades(interaction: discord.Interaction, days: int = 7):
         )
 
     await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@tree.command(name="market_index", description="See whether the market looks normal or is crashing right now", guild=GUILD_ID)
+async def market_index(interaction: discord.Interaction):
+    platform = await asyncio.to_thread(get_user_platform, interaction.user.id)
+    if platform is None:
+        await interaction.response.send_message(
+            "Run /create_tracker first so I know which platform to check.", ephemeral=True
+        )
+        return
+
+    snapshot = await asyncio.to_thread(get_market_index_snapshot, platform)
+    if snapshot is None:
+        await interaction.response.send_message(
+            "Not enough liquid market data right now to read the index - try again later.", ephemeral=True
+        )
+        return
+
+    pct = snapshot["median_change_pct"]
+    crash = is_crash_mode(snapshot)
+
+    if crash:
+        title = "🔴 Market Crash Mode"
+        description = "The broad market is down significantly right now - this looks systemic, not just one card."
+        color = discord.Color.red()
+    elif pct <= -2:
+        title = "🟡 Market Softening"
+        description = "The market's trending down a bit, but not crash territory."
+        color = discord.Color.orange()
+    elif pct >= 2:
+        title = "🟢 Market Rising"
+        description = "The market's trending up right now."
+        color = discord.Color.green()
+    else:
+        title = "⚪ Market Normal"
+        description = "Nothing unusual - the market's roughly flat."
+        color = discord.Color.light_grey()
+
+    embed = discord.Embed(title=title, description=description, color=color)
+    embed.add_field(name="Median Move", value=f"{pct:+.2f}%", inline=True)
+    embed.add_field(name="Sample Size", value=f"{snapshot['sample_size']} cards", inline=True)
+    embed.add_field(name="Platform", value=platform.upper(), inline=True)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)

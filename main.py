@@ -32,7 +32,7 @@ async def position_check_all():
             print(f"Position check failed for user {user['user_id']}: {e}")
 
 
-async def hourly_loop():
+async def repeated_loop():
     await client.wait_until_ready()  # don't try to post before the bot's actually logged in
     while True:
         start = asyncio.get_event_loop().time()
@@ -62,7 +62,7 @@ async def main():
     initcardTable()
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
-        main_scrape(),
+        repeated_loop(),
     )
 
 if __name__=="__main__":
