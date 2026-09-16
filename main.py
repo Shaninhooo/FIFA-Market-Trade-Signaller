@@ -7,7 +7,7 @@ from src.database.db_utils import fetch_trackable_users
 from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions
 import asyncio
 
-SCRAPE_INTERVAL_SECONDS = 3600
+SCRAPE_INTERVAL_SECONDS = 1800
 
 
 async def position_check_all():
@@ -41,16 +41,16 @@ async def hourly_loop():
             await hourly_scrape()
 
             # Then run market strategies and send deals
-            platforms = ["pc", "ps"]
-            for platform in platforms:
-                buy_df = drop_strategy(platform)
-                notify_drop_deals(buy_df, platform)
+            # platforms = ["pc", "ps"]
+            # for platform in platforms:
+            #     buy_df = drop_strategy(platform)
+            #     notify_drop_deals(buy_df, platform)
 
-                fluctuation_df = icon_fluctuation_strategy(platform)
-                notify_icon_fluctuations(fluctuation_df, platform)
+            #     fluctuation_df = icon_fluctuation_strategy(platform)
+            #     notify_icon_fluctuations(fluctuation_df, platform)
 
             # Then check everyone's open positions for sell opportunities
-            await position_check_all()
+            # await position_check_all()
 
         except Exception as e:
             print(f"Hourly loop error: {e}")  # log and continue - see note below on why this matters
