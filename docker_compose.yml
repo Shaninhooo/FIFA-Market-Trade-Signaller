@@ -39,6 +39,7 @@ services:
       flaresolverr:
         condition: service_started
     environment:
+      - PYTHONUNBUFFERED=1
       - MYSQLHOST=db
       - MYSQLUSER=${MYSQL_USER}
       - MYSQLPASSWORD=${MYSQL_PASSWORD}

@@ -10,56 +10,11 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
+from src.flaresolverr import flaresolverr_get, async_flaresolverr_get
 from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs
 
 BASE_URL = "https://www.futbin.com"
-FLARESOLVERR_URL = os.getenv("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
-
-
-def flaresolverr_get(url: str) -> str | None:
-    """Fetch a page's HTML through FlareSolverr (sync), bypassing Cloudflare challenges."""
-    payload = {"cmd": "request.get", "url": url, "maxTimeout": FLARESOLVERR_MAX_TIMEOUT_MS}
-    try:
-        resp = requests.post(FLARESOLVERR_URL, json=payload, timeout=FLARESOLVERR_MAX_TIMEOUT_MS / 1000 + 10)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        print(f"FlareSolverr request failed for {url}: {e}")
-        return None
-
-    if data.get("status") != "ok":
-        print(f"FlareSolverr failed for {url}: {data.get('message')}")
-        return None
-
-    solution = data["solution"]
-    if solution.get("status") != 200:
-        print(f"Failed to fetch {url} via FlareSolverr (status {solution.get('status')})")
-        return None
-
-    return solution["response"]
-
-
-async def async_flaresolverr_get(session: aiohttp.ClientSession, url: str) -> str | None:
-    """Fetch a page's HTML through FlareSolverr (async), bypassing Cloudflare challenges."""
-    payload = {"cmd": "request.get", "url": url, "maxTimeout": FLARESOLVERR_MAX_TIMEOUT_MS}
-    try:
-        async with session.post(FLARESOLVERR_URL, json=payload) as resp:
-            data = await resp.json()
-    except aiohttp.ClientError as e:
-        print(f"FlareSolverr request failed for {url}: {e}")
-        return None
-
-    if data.get("status") != "ok":
-        print(f"FlareSolverr failed for {url}: {data.get('message')}")
-        return None
-
-    solution = data["solution"]
-    if solution.get("status") != 200:
-        print(f"Failed to fetch sales page {url} via FlareSolverr (status {solution.get('status')})")
-        return None
-
-    return solution["response"]
 
 def extract_card_id(href: str) -> int | None:
     match = re.search(r"/player/(\d+)/", href)
@@ -499,5 +454,5 @@ async def main_scrape():
     # Get all card versions
     versions = ["gold", "icon", "team_of_the_week"]
     for version in versions:
-        await asyncio.to_thread(collect_all_hrefs, version)
+        # await asyncio.to_thread(collect_all_hrefs, version)
         await scrape_players(version)  # async
