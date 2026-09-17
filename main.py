@@ -1,5 +1,5 @@
 import discord
-from src.scraper import hourly_scrape
+from src.scraper import main_scrape
 from src.database.db_schema import initcardTable
 from src.strategy.deal_finder import drop_strategy, icon_fluctuation_strategy
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
@@ -7,7 +7,7 @@ from src.database.db_utils import fetch_trackable_users
 from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions
 import asyncio
 
-SCRAPE_INTERVAL_SECONDS = 3600
+SCRAPE_INTERVAL_SECONDS = 1800
 
 
 async def position_check_all():
@@ -32,25 +32,25 @@ async def position_check_all():
             print(f"Position check failed for user {user['user_id']}: {e}")
 
 
-async def hourly_loop():
+async def repeated_loop():
     await client.wait_until_ready()  # don't try to post before the bot's actually logged in
     while True:
         start = asyncio.get_event_loop().time()
         try:
             # Scrape Market Data Hourly
-            await hourly_scrape()
+            await main_scrape()
 
             # Then run market strategies and send deals
-            platforms = ["pc", "ps"]
-            for platform in platforms:
-                buy_df = drop_strategy(platform)
-                notify_drop_deals(buy_df, platform)
+            # platforms = ["pc", "ps"]
+            # for platform in platforms:
+            #     buy_df = drop_strategy(platform)
+            #     notify_drop_deals(buy_df, platform)
 
-                fluctuation_df = icon_fluctuation_strategy(platform)
-                notify_icon_fluctuations(fluctuation_df, platform)
+            #     fluctuation_df = icon_fluctuation_strategy(platform)
+            #     notify_icon_fluctuations(fluctuation_df, platform)
 
             # Then check everyone's open positions for sell opportunities
-            await position_check_all()
+            # await position_check_all()
 
         except Exception as e:
             print(f"Hourly loop error: {e}")  # log and continue - see note below on why this matters
@@ -62,7 +62,7 @@ async def main():
     initcardTable()
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
-        # hourly_loop(),
+        repeated_loop(),
     )
 
 if __name__=="__main__":

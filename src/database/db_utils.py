@@ -4,6 +4,7 @@ import json
 from dotenv import load_dotenv
 import os
 import asyncio
+from datetime import datetime, timezone, timedelta
 from dateutil import parser
 import pytz
 
@@ -265,6 +266,19 @@ def set_user_platform(discord_id, platform):
         conn.close()
 
 
+def get_user_platform(discord_id):
+    """Look up a user's registered platform ('pc'/'ps'). Returns None if they
+    haven't set one via /create_tracker yet."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT platform FROM users WHERE discord_id = %s", (str(discord_id),))
+            row = cur.fetchone()
+            return row["platform"] if row else None
+    finally:
+        conn.close()
+
+
 def fetch_trackable_users():
     """All users who have signed up with a platform, for the position tracker sweep."""
     conn = get_connection()
@@ -330,6 +344,24 @@ def close_position(user_id, position_id, sell_price, sell_time, exit_reason='man
         conn.close()
 
 
+def set_share_stats(user_id, share):
+    """Opt a user in/out of leaderboard visibility. No user_settings row is
+    created until this is called, so this upserts rather than updates."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_settings (user_id, share_stats)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE share_stats = VALUES(share_stats)
+                """,
+                (user_id, int(bool(share)))
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 # ------------------- DATA FETCHING -------------------
 
@@ -364,6 +396,56 @@ def fetch_total_profit(user_id):
             return cur.fetchone()
     finally:
         conn.close()
+
+
+def fetch_leaderboard(limit=10):
+    """Top users by total realized profit, among those who've opted in via share_stats."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT display_name, total_realized_profit, closed_trades, avg_profit_per_win
+                FROM user_profit_summary
+                WHERE share_stats = 1
+                ORDER BY total_realized_profit DESC
+                LIMIT %s
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def fetch_top_trades(days=7, limit=10):
+    """Best individual closed trades (by realized_profit) in the last `days` days,
+    among users who've opted in via share_stats. Ranks single trades, not per-user
+    totals - a different shape than fetch_leaderboard."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    u.display_name,
+                    c.name,
+                    c.version,
+                    p.quantity,
+                    p.buy_price,
+                    p.sell_price,
+                    p.realized_profit,
+                    p.sell_time
+                FROM positions p
+                JOIN users u ON u.user_id = p.user_id
+                JOIN cards c ON c.card_id = p.card_id
+                LEFT JOIN user_settings us ON us.user_id = p.user_id
+                WHERE p.status IN ('sold', 'stopped_out')
+                  AND p.sell_time >= NOW() - INTERVAL %s DAY
+                  AND us.share_stats = 1
+                ORDER BY p.realized_profit DESC
+                LIMIT %s
+            """, (days, limit))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
 
 def fetch_open_positions(user_id, limit=10):
     """Most recent open positions for a user, newest first."""
@@ -429,6 +511,20 @@ def fetch_meta_hrefs(version, min_price=5000):
                 WHERE c.version = %s
                   AND (ms.sold_price > %s OR ms.sold_price IS NULL);
             """, (version, min_price))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
+def fetch_all_hrefs(version):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT href
+                FROM hrefs
+                WHERE version = %s
+            """, (version,))
             rows = cur.fetchall()
             return [row['href'] for row in rows]
     finally:
@@ -507,28 +603,65 @@ def fetch_card_trades(card_id, platform):
     finally:
         conn.close()
 
+def fetch_price_series(card_id, platform, start_time, end_time):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                        SELECT sale_time, sold_price FROM market_sales
+                        WHERE card_id=%s AND platform=%s AND sold_price > 0
+                            AND sale_time > %s AND sale_time <= %s
+                        ORDER BY sale_time ASC
+                    """, (card_id, platform, start_time, end_time))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
 
-def fetch_market_index_sample(platform, short_hours, long_hours, min_price, sample_min_sales):
+
+def fetch_market_index_sample(platform, short_hours, long_hours, min_price, sample_min_sales,
+                               card_type=None, as_of=None):
     """Per-card short/long average sale price and sample size, for the market-wide
-    index in market_index.py. One row per card that clears the liquidity bar."""
+    index in market_index.py. One row per card that clears the liquidity bar.
+
+    card_type: optional cards.version to restrict the basket to (e.g. "Gold Rare").
+    None (default) includes every version.
+
+    as_of: point in time to anchor both windows to. Defaults to now (live use).
+    Passing a historical datetime computes the index as it would have looked at
+    that moment - critical for backtesting. Sales after `as_of` are excluded on
+    purpose (sale_time <= anchor below), otherwise a historical snapshot would
+    leak future data into what's supposed to be a point-in-time read.
+    """
+    anchor = as_of or datetime.now(timezone.utc)
+    short_cutoff = anchor - timedelta(hours=short_hours)
+    long_cutoff = anchor - timedelta(hours=long_hours)
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             # One row per card, short/long averages computed in SQL rather than
             # pulling every raw sale into Python - stays cheap as card count grows.
-            cur.execute("""
-                SELECT card_id,
-                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS short_avg,
-                       AVG(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN sold_price END) AS long_avg,
-                       COUNT(CASE WHEN sale_time > NOW() - INTERVAL %s HOUR THEN 1 END) AS short_n,
+            query = """
+                SELECT ms.card_id,
+                       AVG(CASE WHEN ms.sale_time > %s THEN ms.sold_price END) AS short_avg,
+                       AVG(ms.sold_price) AS long_avg,
+                       COUNT(CASE WHEN ms.sale_time > %s THEN 1 END) AS short_n,
                        COUNT(*) AS long_n
-                FROM market_sales
-                WHERE platform = %s AND sold_price > %s
-                  AND sale_time > NOW() - INTERVAL %s HOUR
-                GROUP BY card_id
-                HAVING short_n >= %s AND long_n >= %s
-            """, (short_hours, long_hours, short_hours, platform, min_price,
-                  long_hours, sample_min_sales, sample_min_sales * 2))
+                FROM market_sales ms
+                JOIN cards c ON c.card_id = ms.card_id
+                WHERE ms.platform = %s AND ms.sold_price > %s
+                  AND ms.sale_time > %s AND ms.sale_time <= %s
+            """
+            params = [short_cutoff, short_cutoff, platform, min_price, long_cutoff, anchor]
+
+            if card_type is not None:
+                query += " AND c.version = %s"
+                params.append(card_type)
+
+            query += " GROUP BY ms.card_id HAVING short_n >= %s AND long_n >= %s"
+            params.extend([sample_min_sales, sample_min_sales * 2])
+
+            cur.execute(query, params)
             return cur.fetchall()
     finally:
         conn.close()

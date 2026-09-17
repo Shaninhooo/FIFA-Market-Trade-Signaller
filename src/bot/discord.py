@@ -1,7 +1,8 @@
 import discord
 import pymysql
 from src.bot.card_cache import search_cards_fuzzy, refresh_card_cache
-from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit
+from src.database.db_utils import insert_position, get_or_create_user, get_user_id, set_user_platform, get_user_platform, fetch_open_positions, fetch_closed_positions, close_position, fetch_total_profit, set_share_stats, fetch_leaderboard, fetch_top_trades
+from src.strategy.market_index import get_market_index_snapshot, is_crash_mode
 from discord import app_commands
 import os
 import asyncio
@@ -249,4 +250,119 @@ async def flex(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-    
+@tree.command(name="leaderboard_optin", description="Choose whether to appear on /leaderboard", guild=GUILD_ID)
+@app_commands.describe(share="Show your stats on the leaderboard?")
+async def leaderboard_optin(interaction: discord.Interaction, share: bool):
+    user_id = await asyncio.to_thread(get_or_create_user, interaction.user.id, interaction.user.display_name)
+    await asyncio.to_thread(set_share_stats, user_id, share)
+
+    if share:
+        await interaction.response.send_message("You're now visible on the leaderboard.", ephemeral=True)
+    else:
+        await interaction.response.send_message("You've been removed from the leaderboard.", ephemeral=True)
+
+
+@tree.command(name="leaderboard", description="See the top traders by realised profit", guild=GUILD_ID)
+async def leaderboard(interaction: discord.Interaction):
+    rows = await asyncio.to_thread(fetch_leaderboard)
+
+    if not rows:
+        await interaction.response.send_message(
+            "Nobody's opted in to the leaderboard yet - run /leaderboard_optin to be the first!",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    embed = discord.Embed(title="🏆 Leaderboard - Top Traders", color=discord.Color.gold())
+    for i, row in enumerate(rows):
+        rank = medals[i] if i < len(medals) else f"#{i + 1}"
+        avg_win = f"{row['avg_profit_per_win']:,}" if row["avg_profit_per_win"] is not None else "—"
+        embed.add_field(
+            name=f"{rank} {row['display_name']}",
+            value=(
+                f"Total Profit: {row['total_realized_profit']:,}\n"
+                f"Closed Trades: {row['closed_trades']}\n"
+                f"Avg Profit/Win: {avg_win}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@tree.command(name="top_trades", description="See the best individual trades made recently", guild=GUILD_ID)
+@app_commands.describe(days="How many days back to look (default 7)")
+async def top_trades(interaction: discord.Interaction, days: int = 7):
+    if days <= 0:
+        await interaction.response.send_message("Days must be positive.", ephemeral=True)
+        return
+
+    rows = await asyncio.to_thread(fetch_top_trades, days)
+
+    if not rows:
+        await interaction.response.send_message(
+            "No qualifying trades in that window - either nobody's sold, or nobody's opted in via /leaderboard_optin.",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    embed = discord.Embed(title=f"💎 Top Trades - Last {days} Days", color=discord.Color.gold())
+    for i, row in enumerate(rows):
+        rank = medals[i] if i < len(medals) else f"#{i + 1}"
+        embed.add_field(
+            name=f"{rank} {row['name']} ({row['version']}) — {row['display_name']}",
+            value=(
+                f"Qty: {row['quantity']}, {row['buy_price']:,} → {row['sell_price']:,}\n"
+                f"Profit: {row['realized_profit']:,}\n"
+                f"Sold: {row['sell_time'].strftime('%Y-%m-%d %H:%M UTC')}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@tree.command(name="market_index", description="See whether the market looks normal or is crashing right now", guild=GUILD_ID)
+async def market_index(interaction: discord.Interaction):
+    platform = await asyncio.to_thread(get_user_platform, interaction.user.id)
+    if platform is None:
+        await interaction.response.send_message(
+            "Run /create_tracker first so I know which platform to check.", ephemeral=True
+        )
+        return
+
+    snapshot = await asyncio.to_thread(get_market_index_snapshot, platform)
+    if snapshot is None:
+        await interaction.response.send_message(
+            "Not enough liquid market data right now to read the index - try again later.", ephemeral=True
+        )
+        return
+
+    pct = snapshot["median_change_pct"]
+    crash = is_crash_mode(snapshot)
+
+    if crash:
+        title = "🔴 Market Crash Mode"
+        description = "The broad market is down significantly right now - this looks systemic, not just one card."
+        color = discord.Color.red()
+    elif pct <= -2:
+        title = "🟡 Market Softening"
+        description = "The market's trending down a bit, but not crash territory."
+        color = discord.Color.orange()
+    elif pct >= 2:
+        title = "🟢 Market Rising"
+        description = "The market's trending up right now."
+        color = discord.Color.green()
+    else:
+        title = "⚪ Market Normal"
+        description = "Nothing unusual - the market's roughly flat."
+        color = discord.Color.light_grey()
+
+    embed = discord.Embed(title=title, description=description, color=color)
+    embed.add_field(name="Median Move", value=f"{pct:+.2f}%", inline=True)
+    embed.add_field(name="Sample Size", value=f"{snapshot['sample_size']} cards", inline=True)
+    embed.add_field(name="Platform", value=platform.upper(), inline=True)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
