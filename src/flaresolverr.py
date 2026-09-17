@@ -15,8 +15,8 @@ import aiohttp
 FLARESOLVERR_URL = os.getenv("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
 
-flaresolverr_semaphore = threading.Semaphore(1)
-async_flaresolverr_semaphore = asyncio.Semaphore(1)
+flaresolverr_semaphore = threading.Semaphore(3)
+async_flaresolverr_semaphore = asyncio.Semaphore(3)
 
 
 def flaresolverr_get(url: str) -> str | None:

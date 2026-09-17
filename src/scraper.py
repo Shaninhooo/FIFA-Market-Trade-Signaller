@@ -106,7 +106,7 @@ async def scrape_players(version):
     hrefs = fetch_meta_hrefs(version, 2000)
     print(f"Loaded {len(hrefs)} hrefs.")
 
-    sem = asyncio.Semaphore(2)  # concurrency limit
+    sem = asyncio.Semaphore(3)  # concurrency limit
     timeout = aiohttp.ClientTimeout(total=FLARESOLVERR_MAX_TIMEOUT_MS / 1000 + 10)  # FlareSolverr can take up to maxTimeout to solve a challenge
 
     async def process_player(href, session):
