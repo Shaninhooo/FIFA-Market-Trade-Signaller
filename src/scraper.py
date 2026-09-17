@@ -10,7 +10,7 @@ from unidecode import unidecode
 import re
 import pytz
 import aiohttp
-from src.flaresolverr import flaresolverr_get, async_flaresolverr_get
+from src.flaresolverr import fast_get, async_fast_get
 from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs
 
 BASE_URL = "https://www.futbin.com"
@@ -41,7 +41,7 @@ def collect_all_hrefs(version):
         url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
         print(f"[Page {page_num}] Fetching {url}")
 
-        html = flaresolverr_get(url)
+        html = fast_get(url)
         if html is None:
             print(f"Failed to fetch page {page_num}")
             break
@@ -103,7 +103,7 @@ def collect_all_hrefs(version):
 async def scrape_players(version):
 
     # Load hrefs
-    hrefs = fetch_meta_hrefs(version, 2000)
+    hrefs = fetch_all_hrefs(version)
     print(f"Loaded {len(hrefs)} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
@@ -182,7 +182,7 @@ def normalize_column(stat_name: str) -> str:
 def scrape_player(href):
 
     url = f"https://www.futbin.com{href}"
-    html = flaresolverr_get(url)
+    html = fast_get(url)
     if html is None:
         print(f"Failed to fetch {href}")
         return None
@@ -363,7 +363,7 @@ def scrape_player(href):
 # Scrape Live Hourly Prices
 async def fetch_sales(session, url):
     """Fetch page content asynchronously, through FlareSolverr."""
-    return await async_flaresolverr_get(session, url)
+    return await async_fast_get(session, url)
 
 
 
@@ -450,9 +450,12 @@ async def get_sales(sales_href, session):
 
 # Execute Hourly Scrape
 async def main_scrape():
+    # Solve once, up front, so all workers below start with a warm cookie
+    # cache instead of racing to refresh it simultaneously on a cold start.
+    warmup_ok = await asyncio.to_thread(fast_get, f"{BASE_URL}/27/players?version=gold&page=1")
+    if warmup_ok is None:
+        print("⚠️ Warmup solve failed — continuing anyway, workers will retry individually")
 
-    # Get all card versions
     versions = ["gold", "icon", "team_of_the_week"]
     for version in versions:
-        # await asyncio.to_thread(collect_all_hrefs, version)
-        await scrape_players(version)  # async
+        await scrape_players(version)
