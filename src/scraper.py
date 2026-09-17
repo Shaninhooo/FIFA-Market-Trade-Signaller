@@ -141,7 +141,6 @@ async def scrape_players(version):
                     insert_card_roles(card_id, metadata["roles"])
                     insert_card_playstyles(card_id, metadata["playstyles"])
                 else:
-                    print(f"Metadata already exists for player {card_id}, skipping scraping")
                     metadata = None  # we don't need metadata for printing
 
                 # Always scrape market sales
