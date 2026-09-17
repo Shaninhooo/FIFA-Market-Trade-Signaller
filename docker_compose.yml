@@ -1,0 +1,53 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: mydb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db-init:/docker-entrypoint-initdb.d   # any .sql files here run once, on first boot only
+    ports:
+      - "3306:3306"   # remove this if the app never needs to be reached from outside Docker
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Australia/Adelaide
+    ports:
+      - "8191:8191"
+
+  app:
+    build: .
+    container_name: my_python_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      flaresolverr:
+        condition: service_started
+    environment:
+      - MYSQLHOST=db
+      - MYSQLUSER=${MYSQL_USER}
+      - MYSQLPASSWORD=${MYSQL_PASSWORD}
+      - MYSQLDATABASE=${MYSQL_DATABASE}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    volumes:
+      - .:/app
+
+volumes:
+  db_data:
