@@ -533,6 +533,42 @@ def fetch_all_hrefs(version):
     finally:
         conn.close()
 
+def fetch_meta_hrefs_by_club(club, min_price=3000):
+    # club lives on cards, not hrefs, so this needs the join fetch_meta_hrefs skips
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT h.href
+                FROM hrefs h
+                JOIN cards c ON c.card_id = h.card_id
+                LEFT JOIN market_sales ms
+                    ON h.card_id = ms.card_id
+                    AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
+                WHERE c.club = %s
+                GROUP BY h.href
+                HAVING AVG(ms.sold_price) > %s OR AVG(ms.sold_price) IS NULL;
+            """, (club, min_price))
+            rows = cur.fetchall()
+        return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
+def fetch_all_hrefs_by_club(club):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT h.href
+                FROM hrefs h
+                JOIN cards c ON c.card_id = h.card_id
+                WHERE c.club = %s
+            """, (club,))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
 def fetch_drop_candidates(platform="pc"):
     """Fetch raw sales in last 8 hours for dip detection"""
     conn = get_connection()

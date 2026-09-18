@@ -11,7 +11,7 @@ import re
 import pytz
 import aiohttp
 from src.flaresolverr import fast_get, async_fast_get
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_all_hrefs_by_club
 
 BASE_URL = "https://www.futbin.com"
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
@@ -19,6 +19,18 @@ FLARESOLVERR_MAX_TIMEOUT_MS = 60000
 def extract_card_id(href: str) -> int | None:
     match = re.search(r"/player/(\d+)/", href)
     return int(match.group(1)) if match else None
+
+
+def classify_version(revision_text: str) -> str:
+    """Bucket a row's own revision text (e.g. "Gold Rare", "Icon", "TOTW")
+    into one of the canonical version filters the rest of the pipeline
+    (fetch_meta_hrefs, scrape_players, main_scrape) tracks - gold/icon/team_of_the_week."""
+    text = revision_text.lower()
+    if "icon" in text:
+        return "icon"
+    if "totw" in text or "team of the week" in text:
+        return "team_of_the_week"
+    return "gold"
 
 
 def collect_all_hrefs(version):
@@ -50,7 +62,7 @@ def collect_all_hrefs(version):
         rows = soup.find_all("tr", class_="player-row")
 
         # Stop only when page has no rows at all
-        if not rows or page_num==100:
+        if not rows:
             print(f"No player rows found, stopping at page {page_num}")
             break
 
@@ -92,6 +104,95 @@ def collect_all_hrefs(version):
             conn.commit()
 
         print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
+
+        if page_num >= 100:
+            print("Reached page limit of 100, stopping")
+            break
+
+        page_num += 1
+        time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
+
+    print(f"Collected {new_hrefs} new hrefs in total.")
+    conn.close()
+    return list(hrefs)
+
+
+def collect_all_hrefs_all_versions():
+    """Same as collect_all_hrefs, but doesn't need a caller-supplied version -
+    it crawls Futbin's unfiltered listing once and classifies each row's own
+    revision text into a version bucket, so one pass covers every version
+    instead of one crawl per version."""
+    hrefs = set()
+    new_hrefs = 0
+    conn = get_connection()
+
+    # Load existing hrefs from DB (not scoped to a version - a href is unique regardless of it)
+    with conn.cursor() as cur:
+        cur.execute("SELECT href FROM hrefs")
+        for row in cur.fetchall():
+            hrefs.add(row['href'])
+
+    page_num = 1
+
+    while True:
+        url = f"{BASE_URL}/27/players?page={page_num}"
+        print(f"[Page {page_num}] Fetching {url}")
+
+        html = fast_get(url)
+        if html is None:
+            print(f"Failed to fetch page {page_num}")
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr", class_="player-row")
+
+        # Stop only when page has no rows at all
+        if not rows:
+            print(f"No player rows found, stopping at page {page_num}")
+            break
+
+        page_new_hrefs = 0
+        new_entries = []
+
+        for row in rows:
+            name_tag = row.find("a", class_="table-player-name")
+            if name_tag and "href" in name_tag.attrs:
+                href = name_tag["href"]
+                card_id = extract_card_id(href)
+                version_detail = row.find("div", class_="table-player-revision")
+                price = row.find("div", class_="price")
+                if version_detail is None or "SBC" in version_detail.get_text():
+                    continue
+                if price:
+                    price_val = price.get_text(strip=True).replace(",", "")
+                    if price_val == "0":
+                        continue
+                else:
+                    continue
+
+                version = classify_version(version_detail.get_text(strip=True))
+
+                if href not in hrefs:
+                    hrefs.add(href)
+                    page_new_hrefs += 1
+                    new_hrefs += 1
+                    new_entries.append((card_id, href, version))
+
+        if new_entries:
+            with conn.cursor() as cur:
+                cur.executemany("""
+                    INSERT INTO hrefs (card_id, href, version)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE href = VALUES(href), version = VALUES(version);
+                """, new_entries)
+            conn.commit()
+
+        print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
+
+        if page_num >= 100:
+            print("Reached page limit of 100, stopping")
+            break
+
         page_num += 1
         time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
 
@@ -103,8 +204,12 @@ def collect_all_hrefs(version):
 async def scrape_players(version):
 
     # Load hrefs
-    hrefs = fetch_meta_hrefs(version)
-    print(f"Loaded {len(hrefs)} hrefs.")
+
+    if version == "HERO" or version == "EA FC ICONS":
+        hrefs = fetch_all_hrefs_by_club(version)
+    else:
+        hrefs = fetch_meta_hrefs(version)
+    print(f"Loaded {len(hrefs)} {version} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
     timeout = aiohttp.ClientTimeout(total=FLARESOLVERR_MAX_TIMEOUT_MS / 1000 + 10)  # FlareSolverr can take up to maxTimeout to solve a challenge
@@ -456,6 +561,6 @@ async def main_scrape():
     if warmup_ok is None:
         print("⚠️ Warmup solve failed — continuing anyway, workers will retry individually")
 
-    versions = ["gold", "icon", "team_of_the_week"]
+    versions = ["gold", "EA FC ICONS", "team_of_the_week", "HERO"]
     for version in versions:
         await scrape_players(version)
