@@ -50,7 +50,12 @@ def collect_all_hrefs(version):
         # version is a real Futbin filter (e.g. "gold", "icon", "team_of_the_week") -
         # without it this endpoint returns an unfiltered, mixed-type listing, and
         # every row on it would get mislabeled with whatever `version` was passed in.
-        url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
+        if version == "icon":
+            url = f"{BASE_URL}/27/players?page={page_num}&league=2118"
+        elif version == "hero":
+            url = f"{BASE_URL}/27/players?page={page_num}&club=114605"
+        else:
+            url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
         print(f"[Page {page_num}] Fetching {url}")
 
         html = fast_get(url)
@@ -205,10 +210,10 @@ async def scrape_players(version):
 
     # Load hrefs
 
-    if version == "HERO" or version == "EA FC ICONS":
+    if version == "HERO":
         hrefs = fetch_all_hrefs_by_club(version)
     else:
-        hrefs = fetch_meta_hrefs(version)
+        hrefs = fetch_meta_hrefs(version, 3000)
     print(f"Loaded {len(hrefs)} {version} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
@@ -560,7 +565,12 @@ async def main_scrape():
     warmup_ok = await asyncio.to_thread(fast_get, f"{BASE_URL}/27/players?version=gold&page=1")
     if warmup_ok is None:
         print("⚠️ Warmup solve failed — continuing anyway, workers will retry individually")
+    
+    # Collect Hrefs
+    # collect_all_hrefs("icon")
 
-    versions = ["gold", "EA FC ICONS", "team_of_the_week", "HERO"]
+    versions = ["icon", "HERO", "team_of_the_week", "gold"]
     for version in versions:
         await scrape_players(version)
+    
+    print("✅ Scraping complete.")
