@@ -103,7 +103,7 @@ def collect_all_hrefs(version):
 async def scrape_players(version):
 
     # Load hrefs
-    hrefs = fetch_all_hrefs(version)
+    hrefs = fetch_meta_hrefs(version)
     print(f"Loaded {len(hrefs)} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit

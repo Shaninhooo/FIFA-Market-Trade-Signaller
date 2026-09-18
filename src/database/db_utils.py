@@ -500,19 +500,22 @@ def fetch_closed_positions(user_id, limit=10):
         conn.close()
 
 
-def fetch_meta_hrefs(version, min_price=5000):
+def fetch_meta_hrefs(version, min_price=3000):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT c.href
+                SELECT c.href
                 FROM hrefs c
-                LEFT JOIN market_sales ms ON c.card_id = ms.card_id
+                LEFT JOIN market_sales ms 
+                    ON c.card_id = ms.card_id 
+                    AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
                 WHERE c.version = %s
-                  AND (ms.sold_price > %s OR ms.sold_price IS NULL);
+                GROUP BY c.href
+                HAVING AVG(ms.sold_price) > %s OR AVG(ms.sold_price) IS NULL;
             """, (version, min_price))
             rows = cur.fetchall()
-            return [row['href'] for row in rows]
+        return [row['href'] for row in rows]
     finally:
         conn.close()
 
