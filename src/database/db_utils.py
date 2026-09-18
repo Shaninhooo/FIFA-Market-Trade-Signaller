@@ -618,6 +618,52 @@ def fetch_icon_fluctuations(platform="pc"):
     finally:
         conn.close()
 
+def fetch_hero_icon_sales(platform="pc", hours=24, card_type=None):
+    """Fetch raw Hero/Icon sales in the last `hours` hours, for the very
+    short-term dip strategy in deal_finder.py's hero_strategy/icon_dip_strategy.
+    Filtered via cards.club rather than cards.version - Icon/Hero cards
+    aren't tied to a real-world club, so Futbin uses the club field itself to
+    carry that special-version label ("HERO" / "EA FC ICONS"), same as
+    fetch_all_hrefs_by_club/scrape_players already rely on for these two
+    versions. cards.version is free-text scraped straight off each player's
+    own page (e.g. "Prime Icon", "Fut Hero") and isn't a reliable exact-match
+    filter.
+
+    card_type: cards.club to scope to - "HERO" or "EA FC ICONS". None
+    (default) includes both.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            query = """
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    c.rating,
+                    ms.sale_time,
+                    ms.sold_price,
+                    ms.platform
+                FROM market_sales ms
+                JOIN cards c ON ms.card_id = c.card_id
+                WHERE ms.sold_price > 0
+                  AND ms.platform = %s
+                  AND ms.sale_time >= NOW() - INTERVAL %s HOUR
+            """
+            params = [platform, hours]
+
+            if card_type is not None:
+                query += " AND c.club = %s"
+                params.append(card_type)
+            else:
+                query += " AND c.club IN ('HERO', 'EA FC ICONS')"
+
+            cur.execute(query, params)
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
+
 def fetch_card_trades(card_id, platform):
     """Fetch card trade history"""
     conn = get_connection()

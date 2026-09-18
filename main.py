@@ -1,10 +1,10 @@
 import discord
 from src.scraper import main_scrape
 from src.database.db_schema import initcardTable
-from src.strategy.deal_finder import drop_strategy, icon_fluctuation_strategy
+from src.strategy.deal_finder import drop_strategy
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
-from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions
+from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions, notify_hero_deals, notify_icon_deals
 import asyncio
 
 SCRAPE_INTERVAL_SECONDS = 1800
@@ -41,13 +41,14 @@ async def repeated_loop():
             await main_scrape()
 
             # Then run market strategies and send deals
-            # platforms = ["pc", "ps"]
-            # for platform in platforms:
-            #     buy_df = drop_strategy(platform)
-            #     notify_drop_deals(buy_df, platform)
+            platforms = ["pc", "ps"]
+            for platform in platforms:
+                # buy_df = drop_strategy(platform)
+                # await notify_drop_deals(buy_df, platform)
 
-            #     fluctuation_df = icon_fluctuation_strategy(platform)
-            #     notify_icon_fluctuations(fluctuation_df, platform)
+                await notify_hero_deals(platform)
+                await notify_icon_deals(platform)
+                await notify_icon_fluctuations(platform)
 
             # Then check everyone's open positions for sell opportunities
             # await position_check_all()

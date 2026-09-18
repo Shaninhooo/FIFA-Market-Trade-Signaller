@@ -32,12 +32,35 @@ async def on_ready():
 
 # ------------------- BOT FUNCTIONS -------------------
 
-def send_message(message: str, version):
-    # if not DISCORD_WEBHOOK:
-    #     print("⚠️ No Discord webhook set.")
-    #     return
-    # webhook_client.post(content=message)
-    return
+# Each deal feed (card type x platform) posts to its own fixed Discord
+# channel rather than one auto-created/discovered by name - set the matching
+# *_CHANNEL_ID in .env to the real channel's ID (Discord: enable Developer
+# Mode, right-click the channel, "Copy Channel ID"). A key with no env var
+# set, or one pointing at a channel the bot can't see, just logs and skips.
+DEAL_CHANNEL_IDS = {
+    "hero_pc": os.getenv("HERO_PC_CHANNEL_ID"),
+    "hero_ps": os.getenv("HERO_PS_CHANNEL_ID"),
+    "icon_pc": os.getenv("ICON_PC_CHANNEL_ID"),
+    "icon_ps": os.getenv("ICON_PS_CHANNEL_ID"),
+    "gold_pc": os.getenv("GOLD_PC_CHANNEL_ID"),
+    "gold_ps": os.getenv("GOLD_PS_CHANNEL_ID"),
+}
+
+
+async def send_message(message: str, channel_key: str):
+    """Post `message` into the Discord channel configured for `channel_key`
+    (e.g. "hero_pc") - see DEAL_CHANNEL_IDS above."""
+    channel_id = DEAL_CHANNEL_IDS.get(channel_key)
+    if not channel_id:
+        print(f"No channel configured for '{channel_key}' - set its *_CHANNEL_ID in .env")
+        return
+
+    channel = client.get_channel(int(channel_id))
+    if channel is None:
+        print(f"Couldn't find channel {channel_id} for '{channel_key}' - check the ID and that the bot has access to it")
+        return
+
+    await channel.send(message)
 
 
 
