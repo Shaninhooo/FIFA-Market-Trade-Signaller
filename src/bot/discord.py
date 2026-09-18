@@ -47,17 +47,41 @@ DEAL_CHANNEL_IDS = {
 }
 
 
-async def send_message(message: str, channel_key: str):
-    """Post `message` into the Discord channel configured for `channel_key`
-    (e.g. "hero_pc") - see DEAL_CHANNEL_IDS above."""
+def _get_deal_channel(channel_key: str):
     channel_id = DEAL_CHANNEL_IDS.get(channel_key)
     if not channel_id:
         print(f"No channel configured for '{channel_key}' - set its *_CHANNEL_ID in .env")
-        return
+        return None
 
     channel = client.get_channel(int(channel_id))
     if channel is None:
         print(f"Couldn't find channel {channel_id} for '{channel_key}' - check the ID and that the bot has access to it")
+        return None
+
+    return channel
+
+
+async def clear_channel(channel_key: str):
+    """Delete every message currently in the channel configured for
+    `channel_key`, so a fresh batch of alerts replaces the previous cycle's
+    instead of piling up underneath it. Only deletes messages <14 days old -
+    Discord's bulk-delete API can't touch anything older, but a deal feed
+    should never have anything that stale sitting in it anyway."""
+    channel = _get_deal_channel(channel_key)
+    if channel is None:
+        return
+
+    try:
+        await channel.purge(limit=100)
+    except discord.Forbidden:
+        print(f"Missing permission to clear #{channel.name} - grant the bot Manage Messages.")
+
+
+async def send_message(message: str, channel_key: str):
+    """Post `message` into the Discord channel configured for `channel_key`
+    (e.g. "hero_pc") - see DEAL_CHANNEL_IDS above."""
+    channel = _get_deal_channel(channel_key)
+    if channel is None:
         return
 
     await channel.send(message)

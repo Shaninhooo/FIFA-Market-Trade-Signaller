@@ -48,7 +48,7 @@ async def repeated_loop():
 
                 await notify_hero_deals(platform)
                 await notify_icon_deals(platform)
-                await notify_icon_fluctuations(platform)
+                # await notify_icon_fluctuations(platform)
 
             # Then check everyone's open positions for sell opportunities
             # await position_check_all()

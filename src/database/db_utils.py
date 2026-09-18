@@ -649,14 +649,9 @@ def fetch_hero_icon_sales(platform="pc", hours=24, card_type=None):
                 WHERE ms.sold_price > 0
                   AND ms.platform = %s
                   AND ms.sale_time >= NOW() - INTERVAL %s HOUR
+                  AND c.club = %s
             """
-            params = [platform, hours]
-
-            if card_type is not None:
-                query += " AND c.club = %s"
-                params.append(card_type)
-            else:
-                query += " AND c.club IN ('HERO', 'EA FC ICONS')"
+            params = [platform, hours, card_type]
 
             cur.execute(query, params)
             return pd.DataFrame(cur.fetchall())

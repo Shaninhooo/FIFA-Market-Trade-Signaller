@@ -1,9 +1,10 @@
-from src.bot.discord import send_message, get_or_create_tracker_channel
+from src.bot.discord import send_message, get_or_create_tracker_channel, clear_channel
 from src.strategy.position_tracker import check_positions
 from src.strategy.deal_finder import icon_fluctuation_strategy, hero_strategy, icon_dip_strategy
 
 # Send Message on Discord of all the Best Found Drop Deals
 async def notify_drop_deals(buy_df, plat):
+    await clear_channel(f"gold_{plat}")
     if not buy_df.empty:
         for _, row in buy_df.head(5).iterrows():
             msg = (
@@ -22,8 +23,12 @@ async def notify_drop_deals(buy_df, plat):
 
 # Send Message on Discord of all the Best Found Icon Fluctuations - shares the
 # icon_{plat} channel with notify_icon_deals below, since both are icon signals.
+# NOTE: each of these two clears the channel before posting its own batch, so
+# if both run in the same cycle the second one wipes the first's messages -
+# don't enable both for the same platform unless that's what you want.
 async def notify_icon_fluctuations(plat):
     fluctuation_df = icon_fluctuation_strategy(plat)
+    await clear_channel(f"icon_{plat}")
     if not fluctuation_df.empty:
         for _, row in fluctuation_df.head(5).iterrows():
             msg = (
@@ -44,6 +49,7 @@ async def notify_icon_fluctuations(plat):
 # rather than one mixed feed, so each is easy to watch on its own.
 async def notify_hero_deals(plat):
     deals_df = hero_strategy(plat)
+    await clear_channel(f"hero_{plat}")
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (
@@ -61,6 +67,7 @@ async def notify_hero_deals(plat):
 
 async def notify_icon_deals(plat):
     deals_df = icon_dip_strategy(plat)
+    await clear_channel(f"icon_{plat}")
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (
