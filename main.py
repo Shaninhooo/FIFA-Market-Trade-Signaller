@@ -1,5 +1,5 @@
 import discord
-from src.scraper import main_scrape
+from src.scraper import main_scrape, fix_hrefs_card_id_schema
 from src.database.db_schema import initcardTable
 from src.strategy.deal_finder import drop_strategy
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
@@ -62,6 +62,7 @@ async def repeated_loop():
 
 async def main():
     initcardTable()
+    fix_hrefs_card_id_schema()  # one-time migration - remove this line after running it once
     await asyncio.gather(
         client.start(DISCORD_TOKEN),
         repeated_loop(),

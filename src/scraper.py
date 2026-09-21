@@ -79,6 +79,8 @@ def collect_all_hrefs(version):
             if name_tag and "href" in name_tag.attrs:
                 href = name_tag["href"]
                 card_id = extract_card_id(href)
+                if card_id is None:
+                    continue  # href didn't match the expected /player/<id>/ format - nothing to key the row on
                 version_detail = row.find("div", class_="table-player-revision")
                 price = row.find("div", class_="price")
                 if version_detail is None or "SBC" in version_detail.get_text():
@@ -164,6 +166,8 @@ def collect_all_hrefs_all_versions():
             if name_tag and "href" in name_tag.attrs:
                 href = name_tag["href"]
                 card_id = extract_card_id(href)
+                if card_id is None:
+                    continue  # href didn't match the expected /player/<id>/ format - nothing to key the row on
                 version_detail = row.find("div", class_="table-player-revision")
                 price = row.find("div", class_="price")
                 if version_detail is None or "SBC" in version_detail.get_text():
@@ -206,6 +210,62 @@ def collect_all_hrefs_all_versions():
     return list(hrefs)
 
 
+def repair_hrefs_card_ids():
+    """One-off repair for hrefs rows whose card_id got corrupted by the old
+    AUTO_INCREMENT bug on hrefs.card_id (fixed to a plain PRIMARY KEY in
+    db_schema.py). A row's href always encoded the real Futbin card id, so
+    this just recomputes it from href and fixes it in place - no re-crawling
+    needed. Safe to run more than once; rows already correct are left alone.
+    """
+    conn = get_connection()
+    fixed, unparseable = 0, 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT card_id, href FROM hrefs")
+            rows = cur.fetchall()
+
+        for row in rows:
+            correct_id = extract_card_id(row["href"])
+            if correct_id is None:
+                print(f"Could not recompute card_id for href {row['href']} - leaving as-is")
+                unparseable += 1
+                continue
+            if correct_id != row["card_id"]:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE hrefs SET card_id = %s WHERE href = %s", (correct_id, row["href"]))
+                fixed += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"Repaired {fixed} hrefs row(s); {unparseable} href(s) couldn't be parsed and were left as-is.")
+
+
+def fix_hrefs_card_id_schema():
+    """One-time migration - run this once, then remove the call from
+    wherever you added it (e.g. main.py). Not something to run on every
+    startup.
+
+    initcardTable()'s CREATE TABLE IF NOT EXISTS only fixed the hrefs/cards
+    AUTO_INCREMENT bug for a table created fresh - it doesn't retroactively
+    alter one that already exists. This drops AUTO_INCREMENT off both
+    tables' card_id in place, then repairs any hrefs rows already
+    corrupted by it.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE hrefs MODIFY card_id INT")
+            cur.execute("ALTER TABLE cards MODIFY card_id INT")
+        conn.commit()
+    finally:
+        conn.close()
+
+    repair_hrefs_card_ids()
+    print("✅ hrefs/cards card_id schema fixed and existing hrefs repaired.")
+
+
 async def scrape_players(version):
 
     # Load hrefs
@@ -221,6 +281,9 @@ async def scrape_players(version):
             await asyncio.sleep(random.uniform(0.5,2))
             try:
                 card_id = extract_card_id(href)
+                if card_id is None:
+                    print(f"Skipped player {href} - href didn't match the expected /player/<id>/ format")
+                    return None
 
                 # Check if metadata already exists in DB
                 conn = get_connection()

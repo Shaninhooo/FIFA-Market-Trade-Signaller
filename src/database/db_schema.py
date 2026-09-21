@@ -9,7 +9,7 @@ def initcardTable():
     # scraped_hrefs table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS hrefs (
-            card_id INT AUTO_INCREMENT PRIMARY KEY,
+            card_id INT PRIMARY KEY,
             href VARCHAR(255),
             version VARCHAR(20)
         )
@@ -18,7 +18,7 @@ def initcardTable():
     # cards table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cards (
-            card_id INT AUTO_INCREMENT PRIMARY KEY,
+            card_id INT PRIMARY KEY,
             name VARCHAR(50) NOT NULL,
             game INT,
             version VARCHAR(20),
