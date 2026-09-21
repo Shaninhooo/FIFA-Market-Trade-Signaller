@@ -373,16 +373,23 @@ async def top_trades(interaction: discord.Interaction, days: int = 7):
 
 @tree.command(name="market_index", description="See whether the market looks normal or is crashing right now", guild=GUILD_ID)
 async def market_index(interaction: discord.Interaction):
+    # Discord needs an ack within 3 seconds or the interaction times out
+    # ("The application did not respond") - the two DB calls below (the
+    # second one a real aggregate query over market_sales/cards) can easily
+    # take longer than that, so defer immediately and send the real result
+    # as a followup once it's ready.
+    await interaction.response.defer(ephemeral=True)
+
     platform = await asyncio.to_thread(get_user_platform, interaction.user.id)
     if platform is None:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Run /create_tracker first so I know which platform to check.", ephemeral=True
         )
         return
 
     snapshot = await asyncio.to_thread(get_market_index_snapshot, platform)
     if snapshot is None:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Not enough liquid market data right now to read the index - try again later.", ephemeral=True
         )
         return
@@ -412,4 +419,4 @@ async def market_index(interaction: discord.Interaction):
     embed.add_field(name="Sample Size", value=f"{snapshot['sample_size']} cards", inline=True)
     embed.add_field(name="Platform", value=platform.upper(), inline=True)
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
