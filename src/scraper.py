@@ -641,7 +641,7 @@ async def main_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-    versions = ["Icon", "Hero", "Team of the  Week", "gold"]
+    versions = ["Icon", "Hero", "Team of the Week", "Gold"]
     for version in versions:
         await scrape_players(version)
     
