@@ -569,6 +569,32 @@ def fetch_all_hrefs_by_club(club):
     finally:
         conn.close()
 
+def fetch_ver_href(version):
+    """All hrefs for cards whose own scraped version text contains `version`
+    as a substring (e.g. "Icon" matches "Prime Icon", "Hero" matches "Fut
+    Hero") - matches the free-text cards.version field directly with LIKE,
+    instead of an exact match or joining through cards.club.
+
+    Note this still joins through cards, same as fetch_all_hrefs_by_club -
+    so a href only shows up here once that card's metadata has actually
+    been scraped and cards.version populated. It doesn't help discover a
+    brand-new card matching this version before its own page has been
+    scraped once.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT h.href
+                FROM hrefs h
+                JOIN cards c ON c.card_id = h.card_id
+                WHERE c.version LIKE %s
+            """, (f"%{version}%",))
+            rows = cur.fetchall()
+            return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
 def insert_unique_event(event_name, start_datetime, end_datetime, version=None):
     """Insert a one-off event (e.g. a team release). Relies on the
     (event_name, start_datetime) unique key on unique_events - INSERT IGNORE

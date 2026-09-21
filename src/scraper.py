@@ -11,7 +11,7 @@ import re
 import pytz
 import aiohttp
 from src.flaresolverr import fast_get, async_fast_get
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_all_hrefs_by_club, insert_unique_event
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_ver_href, insert_unique_event
 
 BASE_URL = "https://www.futbin.com"
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
@@ -210,8 +210,8 @@ async def scrape_players(version):
 
     # Load hrefs
 
-    if version == "HERO":
-        hrefs = fetch_all_hrefs_by_club(version)
+    if version in ("HERO", "icon"):
+        hrefs = fetch_ver_href(version)
     else:
         hrefs = fetch_meta_hrefs(version, 3000)
     print(f"Loaded {len(hrefs)} {version} hrefs.")
