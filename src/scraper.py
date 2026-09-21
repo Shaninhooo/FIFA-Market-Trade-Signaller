@@ -252,12 +252,21 @@ def fix_hrefs_card_id_schema():
     alter one that already exists. This drops AUTO_INCREMENT off both
     tables' card_id in place, then repairs any hrefs rows already
     corrupted by it.
+
+    FOREIGN_KEY_CHECKS is disabled for this connection while the ALTERs
+    run - card_playstyles/card_roles/the stat tables/market_sales/positions
+    all have an FK pointing at cards.card_id, and MySQL refuses to modify a
+    column an active FK references. The column's type isn't changing (still
+    INT, just losing AUTO_INCREMENT), so this is safe; re-enabled
+    immediately after.
     """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            cur.execute("SET FOREIGN_KEY_CHECKS=0")
             cur.execute("ALTER TABLE hrefs MODIFY card_id INT")
             cur.execute("ALTER TABLE cards MODIFY card_id INT")
+            cur.execute("SET FOREIGN_KEY_CHECKS=1")
         conn.commit()
     finally:
         conn.close()
