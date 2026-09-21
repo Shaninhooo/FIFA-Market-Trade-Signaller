@@ -655,11 +655,7 @@ async def main_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-<<<<<<< HEAD
     versions = ["icon", "hero", "team_of_the_week", "gold"]
-=======
-    versions = ["icon", "hero", "team of the week", "gold"]
->>>>>>> 4fd1a70 (refactor(scraper): remove one-time migration functions and clean up imports)
     for version in versions:
         await scrape_players(version)
     
