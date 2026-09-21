@@ -167,8 +167,18 @@ def initcardTable():
             event_name TEXT NOT NULL,
             frequency TEXT NOT NULL,
             day_of_week INT,
-            time_of_day TIME
+            time_of_day TIME,
+            UNIQUE KEY uniq_event_name (event_name(191))
         )
+    """)
+
+    # Known recurring events. day_of_week follows Python's datetime.weekday()
+    # (Monday=0 ... Sunday=6); time_of_day is UK time, matching the rest of
+    # the event pipeline (scrape_events). INSERT IGNORE keeps this idempotent
+    # across every startup, since initcardTable() runs on every boot.
+    cur.execute("""
+        INSERT IGNORE INTO recurring_events (event_name, frequency, day_of_week, time_of_day)
+        VALUES ('Division Rivals Rewards', 'weekly', 3, '08:00:00')
     """)
 
     # unique_events
@@ -178,7 +188,8 @@ def initcardTable():
             event_name TEXT NOT NULL,
             version VARCHAR(20),
             start_datetime DATETIME NOT NULL,
-            end_datetime DATETIME NOT NULL
+            end_datetime DATETIME NOT NULL,
+            UNIQUE KEY uniq_event_name_start (event_name(191), start_datetime)
         )
     """)
 

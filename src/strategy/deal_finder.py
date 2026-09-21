@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
 import os
+import pytz
+from datetime import datetime
 from dotenv import load_dotenv
-from src.database.db_utils import fetch_drop_candidates, fetch_icon_fluctuations, fetch_hero_icon_sales
+from src.database.db_utils import fetch_drop_candidates, fetch_icon_fluctuations, fetch_hero_icon_sales, fetch_upcoming_events, fetch_daily_price_history
 import asyncio
 
 # ------------------- STRATEGIES -------------------
@@ -73,8 +75,12 @@ def drop_strategy(platform, apply_event_gate=True):
         (df['sold_price'] > 0)
     ]
  
+    # Excludes the short window (sale_time <= cutoff_short) so the baseline
+    # reflects pre-drop pricing instead of being diluted by the very drop
+    # it's being compared against.
     long_df = df[
         (df['sale_time'] > cutoff_long) &
+        (df['sale_time'] <= cutoff_short) &
         (df['platform'] == platform) &
         (df['sold_price'] > 0)
     ]
@@ -105,7 +111,7 @@ def drop_strategy(platform, apply_event_gate=True):
         long_prices = long_group.head(LONG_TRADES)['sold_price']
         last_long_avg = long_prices.mean()
         long_std = long_prices.std()
-        sales_volume = len(long_group)
+        sales_volume = len(long_prices)  # matches the sample the stats above are actually computed from
  
         if last_short_avg < 5000 or last_long_avg == 0:
             continue
@@ -207,11 +213,14 @@ def _hero_icon_dip_strategy(platform, card_type, label):
     for card_id, group in df.groupby("card_id"):
         group = group.sort_values("sale_time", ascending=False)
         recent = group[group["sale_time"] > cutoff_recent]
+        # Excludes the recent window so the baseline reflects pre-dip pricing
+        # instead of being pulled toward the very dip it's compared against.
+        baseline = group[group["sale_time"] <= cutoff_recent]
 
-        if len(group) < MIN_BASELINE_SALES or len(recent) < MIN_RECENT_SALES:
+        if len(baseline) < MIN_BASELINE_SALES or len(recent) < MIN_RECENT_SALES:
             continue
 
-        baseline_median = group["sold_price"].median()
+        baseline_median = baseline["sold_price"].median()
         if baseline_median < HERO_ICON_MIN_PRICE:
             continue
 
@@ -252,7 +261,7 @@ def _hero_icon_dip_strategy(platform, card_type, label):
             "baseline_median": round(baseline_median, 2),
             "drop_%": round(drop_pct, 2),
             "recent_sales": len(recent),
-            "baseline_sales": len(group),
+            "baseline_sales": len(baseline),
             "suggested_buy": buy_price,
             "suggested_sell_raw": raw_sell_price,
             "suggested_sell_after_tax": sell_price_after_tax,
@@ -346,3 +355,132 @@ def icon_fluctuation_strategy(platform):
         fluctuation_df = fluctuation_df[display_cols]
 
     return fluctuation_df
+
+
+def scheduled_event_strategy(lookahead_hours=24, trailing_hours=6):
+    """
+    Calendar-triggered strategy - unlike everything else in this module, it
+    never looks at market_sales. It flags known FUT calendar events (team
+    releases, TOTW, Division Rivals rewards) that predictably flood
+    gold-card supply and depress prices market-wide for their duration, so
+    a genuine mean-reversion dip can be told apart from a temporary,
+    explainable supply shock BEFORE the price even moves - the lead time
+    drop_strategy's purely reactive z-score can't offer on its own.
+
+    This is intentionally market-wide, not per-card: today's event data
+    doesn't track which specific cards an event impacts, only that gold
+    supply broadly shifts around it. Treat this as an advisory gate on
+    drop_strategy / position sizing, not a standalone buy signal.
+    """
+    now_uk = datetime.now(pytz.timezone("Europe/London")).replace(tzinfo=None)
+    events = fetch_upcoming_events(lookahead_hours=lookahead_hours, trailing_hours=trailing_hours)
+
+    advisories = []
+
+    for event in events:
+        start, end = event["start"], event["end"]
+
+        if start <= now_uk <= end:
+            status = "active"
+            guidance = (
+                f"Gold-card supply likely elevated until {end:%a %H:%M} UK - "
+                "treat dips as supply-driven, not pure mean-reversion, until then."
+            )
+        elif start > now_uk:
+            status = "starting_soon"
+            guidance = (
+                f"Starts in {start - now_uk}. Expect gold prices to soften over its run - "
+                f"consider waiting to buy until near {end:%a %H:%M} UK."
+            )
+        else:
+            status = "recently_ended"
+            guidance = f"Ended {now_uk - end} ago - prices may still be recovering from elevated supply."
+
+        advisories.append({
+            "event_name": event["event_name"],
+            "status": status,
+            "starts": start,
+            "ends": end,
+            "guidance": guidance,
+        })
+
+    return advisories
+
+
+# Don't evaluate a card until it's had this many qualifying trading days -
+# the first few days after release are almost guaranteed to keep falling as
+# scarcity resolves, so there's no dip worth acting on yet at any price.
+EARLY_GAME_MIN_DAYS_LIVE = 5
+EARLY_GAME_MIN_DAILY_SALES = 5
+
+# Today's % decline must shrink to at most this fraction of yesterday's to
+# count as "bottoming out" rather than "still falling about as fast as before".
+EARLY_GAME_DECELERATION_RATIO = 0.7
+
+
+def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
+    """
+    Early-game buy strategy for meta gold cards - for the launch-window
+    period when drop_strategy's mean-reversion assumption doesn't hold.
+    Gold-card supply increases every day post-launch as more packs get
+    opened, so prices trend down for real rather than noisily wobbling
+    around a stable mean; a "dip below the recent average" isn't a signal
+    worth trusting yet; a genuine change in the trend itself is.
+
+    Instead of flagging a price below some baseline, this looks for
+    deceleration: the day-over-day decline shrinking, which is the closest
+    thing to a "bottoming out" signal available without assuming the
+    market has already stabilized. Deliberately simple (a two-day
+    comparison) rather than fitting a curve - early game means there isn't
+    much history to fit one against yet anyway.
+
+    min_days_live: cards with less history than this are skipped entirely.
+    """
+    df = fetch_daily_price_history(platform=platform, min_daily_sales=EARLY_GAME_MIN_DAILY_SALES)
+    if df.empty:
+        print(f"No daily price history on {platform}")
+        return pd.DataFrame()
+
+    candidates = []
+
+    for card_id, group in df.groupby("card_id"):
+        group = group.sort_values("sale_date")
+
+        if len(group) < min_days_live:
+            continue  # not enough trading days yet - still too early to trust any signal
+
+        prices = group["avg_price"].to_numpy()
+        pct_changes = (prices[1:] - prices[:-1]) / prices[:-1] * 100  # day-over-day % change
+
+        if len(pct_changes) < 2:
+            continue  # need at least two changes to compare today's decline against yesterday's
+
+        latest_change, prior_change = pct_changes[-1], pct_changes[-2]
+
+        if latest_change >= 0 or prior_change >= 0:
+            continue  # not in a decline right now - not what this strategy targets
+
+        if abs(latest_change) >= abs(prior_change) * EARLY_GAME_DECELERATION_RATIO:
+            continue  # still falling about as fast as before - not bottoming yet
+
+        latest_price = prices[-1]
+
+        candidates.append({
+            "name": group.iloc[-1]["name"],
+            "version": group.iloc[-1]["version"],
+            "days_live": len(group),
+            "latest_price": round(latest_price, 2),
+            "latest_daily_change_%": round(latest_change, 2),
+            "prior_daily_change_%": round(prior_change, 2),
+            # A small premium over the last average, not a discount - the
+            # signal here is "the fall is easing", not "it's momentarily cheap",
+            # so waiting for that confirmation costs a bit of edge on purpose.
+            "suggested_buy": round(latest_price * 1.01),
+        })
+
+    candidates_df = pd.DataFrame(candidates)
+
+    if not candidates_df.empty:
+        candidates_df = candidates_df.sort_values("latest_daily_change_%")
+
+    return candidates_df

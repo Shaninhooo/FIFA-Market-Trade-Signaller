@@ -4,7 +4,7 @@ import json
 from dotenv import load_dotenv
 import os
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from dateutil import parser
 import pytz
 
@@ -569,6 +569,89 @@ def fetch_all_hrefs_by_club(club):
     finally:
         conn.close()
 
+def insert_unique_event(event_name, start_datetime, end_datetime, version=None):
+    """Insert a one-off event (e.g. a team release). Relies on the
+    (event_name, start_datetime) unique key on unique_events - INSERT IGNORE
+    silently skips it if that same event/date has already been recorded."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT IGNORE INTO unique_events (event_name, version, start_datetime, end_datetime)
+                VALUES (%s, %s, %s, %s)
+            """, (event_name, version, start_datetime, end_datetime))
+            inserted = cur.rowcount > 0
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+def _next_recurring_occurrence(day_of_week, time_of_day, now_uk):
+    """Nearest occurrence (past or future) of a weekly recurring event to
+    now_uk (a naive UK-wall-clock datetime), among last/this/next week's
+    instance - lets the caller tell "just happened" from "about to happen"."""
+    if day_of_week is None or time_of_day is None:
+        return None
+
+    seconds = int(time_of_day.total_seconds())  # pymysql returns TIME as timedelta
+    hour, minute = seconds // 3600, (seconds % 3600) // 60
+
+    days_ahead = (day_of_week - now_uk.weekday()) % 7
+    this_week = now_uk.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=days_ahead)
+
+    candidates = [this_week - timedelta(days=7), this_week, this_week + timedelta(days=7)]
+    return min(candidates, key=lambda c: abs((c - now_uk).total_seconds()))
+
+def fetch_upcoming_events(lookahead_hours=24, trailing_hours=6):
+    """Return known FUT calendar events (team releases, TOTW, recurring
+    events like Division Rivals Rewards) that are active now, start within
+    lookahead_hours, or occurred within the last trailing_hours.
+
+    All datetimes are naive UK wall-clock time, matching how scrape_events
+    and the recurring_events seed data store them - kept naive throughout
+    rather than mixed with timezone-aware values, to avoid tz-comparison bugs.
+    Returns a list of {event_name, start, end, source} dicts; classification
+    (active/starting soon/recently ended) and any guidance is left to the
+    caller in the strategy layer, not decided here.
+    """
+    now_uk = datetime.now(pytz.timezone("Europe/London")).replace(tzinfo=None)
+    window_start = now_uk - timedelta(hours=trailing_hours)
+    window_end = now_uk + timedelta(hours=lookahead_hours)
+
+    events = []
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT event_name, version, start_datetime, end_datetime
+                FROM unique_events
+                WHERE end_datetime >= %s AND start_datetime <= %s
+            """, (window_start, window_end))
+            for row in cur.fetchall():
+                events.append({
+                    "event_name": row["event_name"],
+                    "start": row["start_datetime"],
+                    "end": row["end_datetime"],
+                    "source": "unique",
+                })
+
+            cur.execute("SELECT event_name, day_of_week, time_of_day FROM recurring_events")
+            recurring_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    for row in recurring_rows:
+        occurrence = _next_recurring_occurrence(row["day_of_week"], row["time_of_day"], now_uk)
+        if occurrence is not None and window_start <= occurrence <= window_end:
+            events.append({
+                "event_name": row["event_name"],
+                "start": occurrence,
+                "end": occurrence,  # instantaneous - recurring_events tracks no duration
+                "source": "recurring",
+            })
+
+    return events
+
 def fetch_drop_candidates(platform="pc"):
     """Fetch raw sales in last 8 hours for dip detection"""
     conn = get_connection()
@@ -586,7 +669,7 @@ def fetch_drop_candidates(platform="pc"):
                 JOIN cards c ON ms.card_id = c.card_id
                 WHERE ms.sold_price > 10000
                   AND ms.platform = %s
-                  AND c.version NOT IN ('All Icons')
+                  AND c.club NOT IN ('HERO', 'EA FC ICONS')
                   AND ms.sale_time >= NOW() - INTERVAL 8 HOUR
             """, (platform,))
             return pd.DataFrame(cur.fetchall())
@@ -611,7 +694,7 @@ def fetch_icon_fluctuations(platform="pc"):
                 JOIN cards c ON ms.card_id = c.card_id
                 WHERE ms.sold_price > 0
                   AND ms.platform = %s
-                  AND c.version IN ('All Icons')
+                  AND c.club IN ('HERO', 'EA FC ICONS')
                   AND ms.sale_time >= NOW() - INTERVAL 6 HOUR
             """, (platform,))
             return pd.DataFrame(cur.fetchall())
@@ -711,8 +794,13 @@ def fetch_market_index_sample(platform, short_hours, long_hours, min_price, samp
     that moment - critical for backtesting. Sales after `as_of` are excluded on
     purpose (sale_time <= anchor below), otherwise a historical snapshot would
     leak future data into what's supposed to be a point-in-time read.
+
+    market_sales.sale_time is stored as naive Adelaide wall-clock time (see
+    insert_sale_db), not UTC - so "now" has to be computed in that same
+    naive-Adelaide frame, or every window silently anchors ~10 hours off
+    from what the stored data considers "now".
     """
-    anchor = as_of or datetime.now(timezone.utc)
+    anchor = as_of or datetime.now(pytz.timezone("Australia/Adelaide")).replace(tzinfo=None)
     short_cutoff = anchor - timedelta(hours=short_hours)
     long_cutoff = anchor - timedelta(hours=long_hours)
 
@@ -746,9 +834,42 @@ def fetch_market_index_sample(platform, short_hours, long_hours, min_price, samp
     finally:
         conn.close()
 
+def fetch_daily_price_history(platform="pc", min_price=10000, min_daily_sales=5):
+    """Per-card daily average sale price and volume, one row per (card_id, date)
+    that clears the daily liquidity bar. For the early-game trend/deceleration
+    strategy in deal_finder.py, which operates on day-over-day price movement
+    rather than the multi-hour windows the reactive strategies use - early
+    game's dominant force is a real declining trend (supply grows every day
+    as packs get opened), not noise around a stable mean, so "day" rather
+    than "hour" is the timescale that actually matters there.
 
-# fetch_upcoming_events(conn, lookahead_hours=EVENT_LOOKAHEAD_HOURS)
-
+    Hero/Icon cards are excluded (same club-based filter as
+    fetch_drop_candidates) since they don't follow the same daily
+    pack-supply dynamics as golds.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ms.card_id,
+                    c.name,
+                    c.version,
+                    DATE(ms.sale_time) AS sale_date,
+                    AVG(ms.sold_price) AS avg_price,
+                    COUNT(*) AS n
+                FROM market_sales ms
+                JOIN cards c ON c.card_id = ms.card_id
+                WHERE ms.platform = %s
+                  AND ms.sold_price > %s
+                  AND c.club NOT IN ('HERO', 'EA FC ICONS')
+                GROUP BY ms.card_id, c.name, c.version, DATE(ms.sale_time)
+                HAVING n >= %s
+                ORDER BY ms.card_id, sale_date
+            """, (platform, min_price, min_daily_sales))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
 
 
 # ------------------- DATA DROPPING -------------------

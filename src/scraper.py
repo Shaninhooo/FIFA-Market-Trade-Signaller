@@ -11,7 +11,7 @@ import re
 import pytz
 import aiohttp
 from src.flaresolverr import fast_get, async_fast_get
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_all_hrefs_by_club
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_all_hrefs_by_club, insert_unique_event
 
 BASE_URL = "https://www.futbin.com"
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
@@ -558,6 +558,81 @@ async def get_sales(sales_href, session):
     return sales_by_platform
 
 
+# Scrape Events
+calendar_url = "https://fifauteam.com/fc-27-schedule/"
+
+
+DEFAULT_TEAM_EVENT_DURATION_DAYS = 7  # fallback when a row's own duration span can't be parsed
+
+
+def scrape_events(year=None):
+    """Scrape fifauteam.com's FC 27 schedule for team-release events (the rows
+    tagged class="team") and store each one in unique_events, skipping any
+    (event_name, start_datetime) pair already recorded.
+
+    The schedule table has no year in its "DD/MM" date headers, so `year`
+    defaults to the current year - pass it explicitly if scraping a schedule
+    that spans a year boundary.
+    """
+    if year is None:
+        year = datetime.datetime.now().year
+
+    html = fast_get(calendar_url)
+    if html is None:
+        print(f"Failed to fetch {calendar_url}")
+        return
+
+    soup = BeautifulSoup(html, "html.parser")
+    uk = pytz.timezone("Europe/London")
+
+    current_date = None  # "DD/MM" from the most recently seen header row
+    new_events = 0
+
+    for row in soup.find_all("tr"):
+        if row.find("th") is not None:
+            date_tag = row.find("strong")
+            if date_tag:
+                current_date = date_tag.get_text(strip=True)
+            continue
+
+        team_cell = row.find("td", class_="team")
+        if team_cell is None or current_date is None:
+            continue
+
+        cells = row.find_all("td")
+        if len(cells) < 3:
+            continue
+
+        time_cell, content_cell = cells[1], cells[2]
+        time_text = time_cell.get_text(" ", strip=True)
+
+        time_match = re.match(r"(\d{1,2}:\d{2})", time_text)
+        release_time = time_match.group(1) if time_match else "00:00"
+
+        duration_match = re.search(r"(\d+)\s*day", time_text)
+        duration_days = int(duration_match.group(1)) if duration_match else DEFAULT_TEAM_EVENT_DURATION_DAYS
+
+        name_tag = content_cell.find("a")
+        team_name = name_tag.get_text(strip=True) if name_tag else content_cell.get_text(strip=True)
+
+        try:
+            day, month = current_date.split("/")
+            naive_dt = datetime.datetime.strptime(f"{day}/{month}/{year} {release_time}", "%d/%m/%Y %H:%M")
+            start_datetime = uk.localize(naive_dt)
+        except ValueError:
+            print(f"Could not parse date '{current_date} {release_time}' for team '{team_name}'")
+            continue
+
+        end_datetime = start_datetime + datetime.timedelta(days=duration_days)
+
+        if insert_unique_event(team_name, start_datetime, end_datetime):
+            new_events += 1
+
+    print(f"Collected {new_events} new team events.")
+
+
+
+
 # Execute Hourly Scrape
 async def main_scrape():
     # Solve once, up front, so all workers below start with a warm cookie
@@ -574,3 +649,8 @@ async def main_scrape():
         await scrape_players(version)
     
     print("✅ Scraping complete.")
+
+
+
+
+print(scrape_events())
