@@ -513,7 +513,7 @@ def fetch_meta_hrefs(version, min_price=3000):
                 WHERE c.version = %s
                 GROUP BY c.href
                 HAVING AVG(ms.sold_price) > %s OR AVG(ms.sold_price) IS NULL;
-            """, (f"%{version}%", min_price))
+            """, (version, min_price))
             rows = cur.fetchall()
         return [row['href'] for row in rows]
     finally:
@@ -571,7 +571,7 @@ def fetch_all_hrefs_by_club(club):
 
 def fetch_ver_href(version):
     """All hrefs for cards whose own scraped version text contains `version`
-    as a substring (e.g. "Icon" matches "Prime Icon", "Hero" matches "Fut
+    as a substring (e.g. "Icon" matches "All Icons", "Hero" matches "Base
     Hero") - matches the free-text cards.version field directly with LIKE,
     instead of an exact match or joining through cards.club.
 
@@ -735,7 +735,7 @@ def fetch_hero_icon_sales(platform="pc", hours=24, card_type=None):
     carry that special-version label ("HERO" / "EA FC ICONS"), same as
     fetch_all_hrefs_by_club/scrape_players already rely on for these two
     versions. cards.version is free-text scraped straight off each player's
-    own page (e.g. "Prime Icon", "Fut Hero") and isn't a reliable exact-match
+    own page (e.g. "All Icons", "Base Hero") and isn't a reliable exact-match
     filter.
 
     card_type: cards.club to scope to - "HERO" or "EA FC ICONS". None

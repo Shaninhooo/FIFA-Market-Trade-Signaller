@@ -279,7 +279,14 @@ async def scrape_players(version):
 
     # Load hrefs
 
-    hrefs = fetch_meta_hrefs(version, 3000)
+    # hrefs.version only ever gets tagged gold/icon/team_of_the_week at
+    # collection time (classify_version has no "hero" bucket), so hero has
+    # to be found by keyword against cards.version instead - see
+    # fetch_ver_href's docstring for the tradeoff that comes with that.
+    if version == "hero":
+        hrefs = fetch_ver_href(version)
+    else:
+        hrefs = fetch_meta_hrefs(version, 3000)
     print(f"Loaded {len(hrefs)} {version} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
@@ -713,7 +720,7 @@ async def main_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-    versions = ["Icon", "Hero", "Team of the Week", "Gold"]
+    versions = ["icon", "hero", "team_of_the_week", "gold"]
     for version in versions:
         await scrape_players(version)
     
