@@ -210,10 +210,7 @@ async def scrape_players(version):
 
     # Load hrefs
 
-    if version in ("HERO", "icon"):
-        hrefs = fetch_ver_href(version)
-    else:
-        hrefs = fetch_meta_hrefs(version, 3000)
+    hrefs = fetch_meta_hrefs(version, 3000)
     print(f"Loaded {len(hrefs)} {version} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
@@ -644,13 +641,9 @@ async def main_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-    versions = ["icon", "HERO", "team_of_the_week", "gold"]
+    versions = ["Icon", "Hero", "Team of the  Week", "gold"]
     for version in versions:
         await scrape_players(version)
     
     print("✅ Scraping complete.")
 
-
-
-
-print(scrape_events())

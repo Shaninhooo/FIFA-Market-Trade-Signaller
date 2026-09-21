@@ -513,7 +513,7 @@ def fetch_meta_hrefs(version, min_price=3000):
                 WHERE c.version = %s
                 GROUP BY c.href
                 HAVING AVG(ms.sold_price) > %s OR AVG(ms.sold_price) IS NULL;
-            """, (version, min_price))
+            """, (f"%{version}%", min_price))
             rows = cur.fetchall()
         return [row['href'] for row in rows]
     finally:
