@@ -452,7 +452,11 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
         if len(group) < min_days_live:
             continue  # not enough trading days yet - still too early to trust any signal
 
-        prices = group["avg_price"].to_numpy()
+        # MySQL's AVG() always returns DECIMAL regardless of the underlying
+        # column type, and pymysql maps that to decimal.Decimal - cast to
+        # float here so the arithmetic below (e.g. * 1.01) doesn't blow up
+        # mixing Decimal with plain Python floats.
+        prices = group["avg_price"].astype(float).to_numpy()
         pct_changes = (prices[1:] - prices[:-1]) / prices[:-1] * 100  # day-over-day % change
 
         if len(pct_changes) < 2:
