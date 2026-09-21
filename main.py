@@ -4,7 +4,7 @@ from src.database.db_schema import initcardTable
 from src.strategy.deal_finder import drop_strategy
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
-from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions, notify_hero_deals, notify_icon_deals
+from src.bot.notify import notify_drop_deals, notify_icon_fluctuations, notify_positions, notify_hero_deals, notify_icon_deals, notify_early_game_deals
 import asyncio
 
 SCRAPE_INTERVAL_SECONDS = 1800
@@ -45,6 +45,7 @@ async def repeated_loop():
             for platform in platforms:
                 # buy_df = drop_strategy(platform)
                 # await notify_drop_deals(buy_df, platform)
+                await notify_early_game_deals(platform)
 
                 await notify_hero_deals(platform)
                 await notify_icon_deals(platform)

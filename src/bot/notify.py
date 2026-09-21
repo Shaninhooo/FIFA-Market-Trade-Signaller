@@ -1,6 +1,6 @@
 from src.bot.discord import send_message, get_or_create_tracker_channel, clear_channel
 from src.strategy.position_tracker import check_positions
-from src.strategy.deal_finder import icon_fluctuation_strategy, hero_strategy, icon_dip_strategy
+from src.strategy.deal_finder import icon_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy
 
 # Send Message on Discord of all the Best Found Drop Deals
 async def notify_drop_deals(buy_df, plat):
@@ -82,6 +82,27 @@ async def notify_icon_deals(plat):
     else:
         await send_message(f"**No Icon dip candidates found this hour on {plat.upper()}.**", f"icon_{plat}")
 
+
+
+async def notify_early_game_deals(plat):
+    """Early-game deceleration signal - shares the gold_{plat} channel with
+    notify_drop_deals, since both are gold-card buy signals. Same caveat as
+    the icon channel sharing above: each clears the channel before posting
+    its own batch, so don't enable both notify_drop_deals and this one for
+    the same platform/cycle unless overwriting the other's batch is fine."""
+    deals_df = early_game_strategy(plat)
+    await clear_channel(f"gold_{plat}")
+    if not deals_df.empty:
+        for _, row in deals_df.head(5).iterrows():
+            msg = (
+                f"🌱 **Early-Game Signal on {plat.upper()}: {row['name']} ({row['version']})**\n"
+                f"📉 Trend: {row['prior_daily_change_%']}% → {row['latest_daily_change_%']}% day-over-day (decelerating)\n"
+                f"📅 Days live: {row['days_live']}\n"
+                f"🟢 Suggested Buy ~ {row['suggested_buy']:,}"
+            )
+            await send_message(msg, f"gold_{plat}")
+    else:
+        await send_message(f"**No early-game buy candidates found this hour on {plat.upper()}.**", f"gold_{plat}")
 
 
 async def notify_positions(guild, member, user_id, platform):

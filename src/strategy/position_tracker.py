@@ -1,7 +1,8 @@
 import discord
+import pytz
 from src.database.db_utils import fetch_open_positions, fetch_card_trades
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 # Placeholder risk tiers - same caveat as every other hardcoded threshold in
 # this codebase: needs real season data to calibrate properly. Shared by the
@@ -94,8 +95,13 @@ def get_market_snapshot(conn, card_id, platform="pc", window_hours=1, min_sales=
     the prior window doesn't have enough volume to compare against - it's
     fine to still act on price/stop-loss without knowing the trend, just
     not to use momentum-based adjustments in that case.
+
+    market_sales.sale_time is stored as naive Adelaide wall-clock time (see
+    insert_sale_db in db_utils.py), not UTC - so "now" has to be computed in
+    that same naive-Adelaide frame, or every window silently anchors ~10
+    hours off from what the stored data considers "now".
     """
-    anchor = as_of or datetime.now(timezone.utc)
+    anchor = as_of or datetime.now(pytz.timezone("Australia/Adelaide")).replace(tzinfo=None)
  
     def window_stats(start_hours_ago, end_hours_ago):
         window_start = anchor - timedelta(hours=start_hours_ago)
