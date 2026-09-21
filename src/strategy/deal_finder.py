@@ -310,7 +310,9 @@ def icon_fluctuation_strategy(platform):
 
         # Latest price: median of last 3–5 sales
         latest_price = group.sort_values('sale_time', ascending=False)['sold_price'].head(5).median()
-        latest_name = group.sort_values('sale_time', ascending=False).iloc[0]['name']
+        latest_row = group.sort_values('sale_time', ascending=False).iloc[0]
+        latest_name = latest_row['name']
+        latest_version = latest_row['version']
 
 
         avg_price = group['sold_price'].mean()
@@ -328,6 +330,7 @@ def icon_fluctuation_strategy(platform):
             if profit_margin > 8 and latest_price < 500000:
                 fluctuation_candidates.append({
                     "name": latest_name,
+                    "version": latest_version,
                     "latest_sale": latest_price,
                     "avg_price": int(avg_price),
                     "min_price": int(min_price),
@@ -348,7 +351,7 @@ def icon_fluctuation_strategy(platform):
         fluctuation_df = fluctuation_df.sort_values('buy_diff')
 
         display_cols = [
-            "name", "latest_sale", "best_buy", "best_sell",
+            "name", "version", "latest_sale", "best_buy", "best_sell",
             "avg_price", "min_price", "max_price", "spread_%",
             "sales_volume", "profit_margin_%"
         ]

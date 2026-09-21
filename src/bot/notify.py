@@ -32,7 +32,7 @@ async def notify_icon_fluctuations(plat):
     if not fluctuation_df.empty:
         for _, row in fluctuation_df.head(5).iterrows():
             msg = (
-                f"💎 **Icon Fluctuation on {plat.upper()}: {row['name']}**\n"
+                f"💎 **Icon Fluctuation on {plat.upper()}: {row['name']} ({row['version']})**\n"
                 f"🟢 Buy ~ {int(row['best_buy']):,}\n"
                 f"🔴 Sell ~ {int(row['best_sell']):,}\n"
                 f"📊 Latest Sale ~ {int(row['latest_sale']):,}\n"
@@ -53,7 +53,7 @@ async def notify_hero_deals(plat):
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (
-                f"👑 **Hero Dip on {plat.upper()}: {row['name']} ({row['rating']} OVR)**\n"
+                f"👑 **Hero Dip on {plat.upper()}: {row['name']} ({row['version']}, {row['rating']} OVR)**\n"
                 f"📉 Drop: {row['drop_%']}% (last {row['recent_sales']} sale(s) vs {row['baseline_sales']}-sale baseline)\n"
                 f"🟢 Buy ~ {row['suggested_buy']:,}\n"
                 f"🔴 Sell ~ {row['suggested_sell_raw']:,}\n"
@@ -71,7 +71,7 @@ async def notify_icon_deals(plat):
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (
-                f"💎 **Icon Dip on {plat.upper()}: {row['name']} ({row['rating']} OVR)**\n"
+                f"💎 **Icon Dip on {plat.upper()}: {row['name']} ({row['version']}, {row['rating']} OVR)**\n"
                 f"📉 Drop: {row['drop_%']}% (last {row['recent_sales']} sale(s) vs {row['baseline_sales']}-sale baseline)\n"
                 f"🟢 Buy ~ {row['suggested_buy']:,}\n"
                 f"🔴 Sell ~ {row['suggested_sell_raw']:,}\n"
