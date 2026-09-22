@@ -11,8 +11,7 @@ import re
 import pytz
 import aiohttp
 from src.flaresolverr import fast_get, async_fast_get
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_ver_href, insert_unique_event
-
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_ver_href, insert_unique_event, insert_hrefs_batch, load_existing_hrefs
 BASE_URL = "https://www.futbin.com"
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
 
@@ -34,94 +33,78 @@ def classify_version(revision_text: str) -> str:
 
 
 def collect_all_hrefs(version):
-    hrefs = set()
-    new_hrefs = 0
     conn = get_connection()
+    try:
+        hrefs = load_existing_hrefs(conn, version)
+        new_hrefs = 0
+        page_num = 1
 
-    # Load existing hrefs from DB
-    with conn.cursor() as cur:
-        cur.execute("SELECT href FROM hrefs WHERE version=%s", (version,))
-        for row in cur.fetchall():
-            hrefs.add(row['href']) 
+        while True:
+            # version is a real Futbin filter (e.g. "gold", "icon", "team_of_the_week") -
+            # without it this endpoint returns an unfiltered, mixed-type listing, and
+            # every row on it would get mislabeled with whatever `version` was passed in.
+            if version == "icon":
+                url = f"{BASE_URL}/27/players?page={page_num}&league=2118"
+            elif version == "hero":
+                url = f"{BASE_URL}/27/players?page={page_num}&club=114605"
+            else:
+                url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
+            print(f"[Page {page_num}] Fetching {url}")
 
-    page_num = 1
+            html = fast_get(url)
+            if html is None:
+                print(f"Failed to fetch page {page_num}")
+                break
 
-    while True:
-        # version is a real Futbin filter (e.g. "gold", "icon", "team_of_the_week") -
-        # without it this endpoint returns an unfiltered, mixed-type listing, and
-        # every row on it would get mislabeled with whatever `version` was passed in.
-        if version == "icon":
-            url = f"{BASE_URL}/27/players?page={page_num}&league=2118"
-        elif version == "hero":
-            url = f"{BASE_URL}/27/players?page={page_num}&club=114605"
-        else:
-            url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
-        print(f"[Page {page_num}] Fetching {url}")
+            soup = BeautifulSoup(html, "html.parser")
+            rows = soup.find_all("tr", class_="player-row")
 
-        html = fast_get(url)
-        if html is None:
-            print(f"Failed to fetch page {page_num}")
-            break
+            if not rows:
+                print(f"No player rows found, stopping at page {page_num}")
+                break
 
-        soup = BeautifulSoup(html, "html.parser")
-        rows = soup.find_all("tr", class_="player-row")
+            page_new_hrefs = 0
+            new_entries = []
 
-        # Stop only when page has no rows at all
-        if not rows:
-            print(f"No player rows found, stopping at page {page_num}")
-            break
-
-        page_new_hrefs = 0
-        new_entries = []
-
-        for row in rows:
-            name_tag = row.find("a", class_="table-player-name")
-            if name_tag and "href" in name_tag.attrs:
-                href = name_tag["href"]
-                card_id = extract_card_id(href)
-                if card_id is None:
-                    continue  # href didn't match the expected /player/<id>/ format - nothing to key the row on
-                version_detail = row.find("div", class_="table-player-revision")
-                price = row.find("div", class_="price")
-                if version_detail is None or "SBC" in version_detail.get_text():
-                    continue
-                if price:
-                    price_val = price.get_text(strip=True).replace(",", "")
-                    if price_val == "0":
+            for row in rows:
+                name_tag = row.find("a", class_="table-player-name")
+                if name_tag and "href" in name_tag.attrs:
+                    href = name_tag["href"]
+                    card_id = extract_card_id(href)
+                    if card_id is None:
+                        continue  # href didn't match the expected /player/<id>/ format - nothing to key the row on
+                    version_detail = row.find("div", class_="table-player-revision")
+                    price = row.find("div", class_="price")
+                    if version_detail is None or "SBC" in version_detail.get_text():
                         continue
-                else:
-                    continue
+                    if price:
+                        price_val = price.get_text(strip=True).replace(",", "")
+                        if price_val == "0":
+                            continue
+                    else:
+                        continue
 
-                if href not in hrefs:
-                    hrefs.add(href)
-                    page_new_hrefs += 1
-                    new_hrefs += 1
-                    new_entries.append((card_id, href, version))
+                    if href not in hrefs:
+                        hrefs.add(href)
+                        page_new_hrefs += 1
+                        new_hrefs += 1
+                        new_entries.append((card_id, href, version))
 
-        # Bulk insert new hrefs into DB. Updates href/version on conflict rather
-        # than a no-op, so a card mislabeled by a past bug self-heals the next
-        # time it's correctly rediscovered under its real version filter.
-        if new_entries:
-            with conn.cursor() as cur:
-                cur.executemany("""
-                    INSERT INTO hrefs (card_id, href, version)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE href = VALUES(href), version = VALUES(version);
-                """, new_entries)
-            conn.commit()
+            insert_hrefs_batch(conn, new_entries)
 
-        print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
+            print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
 
-        if page_num >= 100:
-            print("Reached page limit of 100, stopping")
-            break
+            if page_num >= 100:
+                print("Reached page limit of 100, stopping")
+                break
 
-        page_num += 1
-        time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
+            page_num += 1
+            time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
 
-    print(f"Collected {new_hrefs} new hrefs in total.")
-    conn.close()
-    return list(hrefs)
+        print(f"Collected {new_hrefs} new hrefs in total.")
+        return list(hrefs)
+    finally:
+        conn.close()
 
 
 def collect_all_hrefs_all_versions():

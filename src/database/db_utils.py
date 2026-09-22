@@ -173,6 +173,34 @@ def insert_card_roles(card_id, roles):
     finally:
         conn.close()
 
+def load_existing_hrefs(conn, version):
+    """
+    Returns the set of hrefs already stored for a given version filter,
+    so the scraper knows which ones it's already discovered and can skip
+    re-adding them to new_entries.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT href FROM hrefs WHERE version=%s", (version,))
+        return {row['href'] for row in cur.fetchall()}
+
+
+def insert_hrefs_batch(conn, entries):
+    """
+    Bulk inserts newly discovered hrefs. Updates href/version on conflict
+    rather than a no-op, so a card mislabeled by a past bug self-heals the
+    next time it's correctly rediscovered under its real version filter.
+
+    entries: list of (card_id, href, version) tuples.
+    """
+    if not entries:
+        return
+    with conn.cursor() as cur:
+        cur.executemany("""
+            INSERT INTO hrefs (card_id, href, version)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE href = VALUES(href), version = VALUES(version);
+        """, entries)
+    conn.commit()
 
 def insert_card_stats(card_id, stats_list):
     """
@@ -507,16 +535,16 @@ def fetch_meta_hrefs(version, min_price=10000):
             cur.execute("""
                 SELECT h.href
                 FROM hrefs h
-                JOIN cards c ON h.real_card_id = c.card_id
+                JOIN cards c ON h.card_id = c.card_id
                 LEFT JOIN market_sales ms 
                     ON c.card_id = ms.card_id 
                     AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
                 WHERE c.version LIKE %s
                 GROUP BY h.href
-                HAVING AVG(ms.sold_price) > %s;
+                HAVING AVG(ms.sold_price) > %s
             """, (f"%{version}%", min_price))
             rows = cur.fetchall()
-        return [row['href'] for row in rows]
+            return [row['href'] for row in rows]
     finally:
         conn.close()
 
@@ -593,6 +621,24 @@ def fetch_ver_href(version):
             """, (f"%{version}%",))
             rows = cur.fetchall()
             return [row['href'] for row in rows]
+    finally:
+        conn.close()
+
+def backfill_real_card_ids():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT card_id, href FROM hrefs WHERE real_card_id IS NULL")
+            rows = cur.fetchall()
+            for row in rows:
+                try:
+                    real_id = int(row['href'].split("/")[3])
+                except (IndexError, ValueError):
+                    print(f"Couldn't parse card id from href: {row['href']}")
+                    continue
+                cur.execute("UPDATE hrefs SET real_card_id = %s WHERE card_id = %s", (real_id, row['card_id']))
+        conn.commit()
+        print("Backfill complete.")
     finally:
         conn.close()
 
