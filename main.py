@@ -5,6 +5,7 @@ from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
 from src.bot.notify import notify_positions, notify_hero_deals, notify_icon_deals, notify_early_game_deals, notify_hero_fluctuations, notify_icon_fluctuations
 import asyncio
+import traceback
 
 SCRAPE_INTERVAL_SECONDS = 1800
 
@@ -61,6 +62,7 @@ async def repeated_loop():
 
         except Exception as e:
             print(f"Hourly loop error: {e}")  # log and continue - see note below on why this matters
+            traceback.print_exc()
 
         elapsed = asyncio.get_event_loop().time() - start
         await asyncio.sleep(max(0, SCRAPE_INTERVAL_SECONDS - elapsed))

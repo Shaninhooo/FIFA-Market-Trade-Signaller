@@ -513,7 +513,7 @@ def fetch_meta_hrefs(version, min_price=10000):
                     AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
                 WHERE c.version LIKE %s
                 GROUP BY h.href
-                HAVING AVG(ms.sold_price) > 10000;
+                HAVING AVG(ms.sold_price) > %s;
             """, (f"%{version}%", min_price))
             rows = cur.fetchall()
         return [row['href'] for row in rows]
