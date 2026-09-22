@@ -21,7 +21,11 @@ MIN_LONG_SALES = 40
 # within a couple of hours, not the multi-hour windows drop_strategy needs
 # to build up a trustworthy sample.
 HERO_ICON_RECENT_HOURS = 2
-HERO_ICON_BASELINE_HOURS = 24
+# The baseline pool is this window MINUS the recent window (they're
+# mutually exclusive - see the baseline-contamination fix), so this is set
+# to 24 + HERO_ICON_RECENT_HOURS rather than a flat 24, to keep the actual
+# baseline pool the same size (~24h) it was before that split.
+HERO_ICON_BASELINE_HOURS = 26
 MIN_BASELINE_SALES = 6
 MIN_RECENT_SALES = 2
 HERO_ICON_MIN_PRICE = 15_000

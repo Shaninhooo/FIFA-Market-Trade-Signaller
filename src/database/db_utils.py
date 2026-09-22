@@ -740,7 +740,15 @@ def fetch_hero_icon_sales(platform="pc", hours=24, card_type=None):
 
     card_type: cards.club to scope to - "HERO" or "EA FC ICONS". None
     (default) includes both.
+
+    market_sales.sale_time is stored as naive Adelaide wall-clock time (see
+    insert_sale_db), not UTC - the cutoff is computed in that same frame
+    rather than via MySQL's NOW() (which reflects the db server's own
+    clock, UTC here since docker_compose.yml sets no TZ on that container),
+    same anchor-mismatch bug already fixed for fetch_market_index_sample /
+    get_market_snapshot.
     """
+    cutoff = datetime.now(pytz.timezone("Australia/Adelaide")).replace(tzinfo=None) - timedelta(hours=hours)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -757,10 +765,10 @@ def fetch_hero_icon_sales(platform="pc", hours=24, card_type=None):
                 JOIN cards c ON ms.card_id = c.card_id
                 WHERE ms.sold_price > 0
                   AND ms.platform = %s
-                  AND ms.sale_time >= NOW() - INTERVAL %s HOUR
+                  AND ms.sale_time >= %s
                   AND c.club = %s
             """
-            params = [platform, hours, card_type]
+            params = [platform, cutoff, card_type]
 
             cur.execute(query, params)
             return pd.DataFrame(cur.fetchall())
