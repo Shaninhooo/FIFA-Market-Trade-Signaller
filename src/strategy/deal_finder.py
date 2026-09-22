@@ -4,7 +4,7 @@ import os
 import pytz
 from datetime import datetime
 from dotenv import load_dotenv
-from src.database.db_utils import fetch_drop_candidates, fetch_icon_fluctuations, fetch_hero_icon_sales, fetch_upcoming_events, fetch_daily_price_history
+from src.database.db_utils import fetch_drop_candidates, fetch_fluctuation_sales, fetch_hero_icon_sales, fetch_upcoming_events, fetch_daily_price_history
 import asyncio
 
 # ------------------- STRATEGIES -------------------
@@ -299,11 +299,20 @@ def icon_dip_strategy(platform):
     return _hero_icon_dip_strategy(platform, card_type="EA FC ICONS", label="Icon")
 
 
-def icon_fluctuation_strategy(platform):
+def _fluctuation_strategy(platform, card_type, label):
+    """
+    Spread-arbitrage strategy shared by Hero and Icon cards: flags a card
+    whose completed sales disagree with each other more than usual within a
+    short window, rather than comparing against a rolling baseline like the
+    dip strategies do. Betting on buyers/sellers momentarily disagreeing on
+    price for the same card, not on the price itself trending anywhere.
 
-    recent_df = fetch_icon_fluctuations(platform=platform)
+    card_type: cards.club to scope to ("HERO" or "EA FC ICONS") - keeping
+    Hero and Icon results separate, same reasoning as _hero_icon_dip_strategy.
+    """
+    recent_df = fetch_fluctuation_sales(platform=platform, card_type=card_type)
     if recent_df.empty:
-        print(f"No Icon fluctuations on {platform}")
+        print(f"No {label} fluctuations on {platform}")
         return pd.DataFrame()
 
     fluctuation_candidates = []
@@ -362,6 +371,16 @@ def icon_fluctuation_strategy(platform):
         fluctuation_df = fluctuation_df[display_cols]
 
     return fluctuation_df
+
+
+def hero_fluctuation_strategy(platform):
+    """Spread-arbitrage strategy for Hero cards. See _fluctuation_strategy."""
+    return _fluctuation_strategy(platform, card_type="HERO", label="Hero")
+
+
+def icon_fluctuation_strategy(platform):
+    """Spread-arbitrage strategy for Icon cards. See _fluctuation_strategy."""
+    return _fluctuation_strategy(platform, card_type="EA FC ICONS", label="Icon")
 
 
 def scheduled_event_strategy(lookahead_hours=24, trailing_hours=6):

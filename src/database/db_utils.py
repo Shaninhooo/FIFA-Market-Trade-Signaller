@@ -703,12 +703,26 @@ def fetch_drop_candidates(platform="pc"):
         conn.close()
 
 
-def fetch_icon_fluctuations(platform="pc"):
-    """Fetch raw Icon/Hero sales in last 6 hours for fluctuation detection"""
+def fetch_fluctuation_sales(platform="pc", card_type=None, hours=6):
+    """Fetch raw Hero/Icon sales in the last `hours` hours, for the
+    fluctuation strategies in deal_finder.py (hero_fluctuation_strategy/
+    icon_fluctuation_strategy). Filtered via cards.club, same reasoning as
+    fetch_hero_icon_sales - cards.version is free text, not a reliable
+    exact-match filter.
+
+    card_type: cards.club to scope to - "HERO" or "EA FC ICONS". None
+    (default) includes both.
+
+    market_sales.sale_time is stored as naive Adelaide wall-clock time - the
+    cutoff is computed in that same frame rather than via MySQL's NOW()
+    (the db server's own clock, UTC here), same anchor-mismatch bug already
+    fixed for fetch_market_index_sample/get_market_snapshot/fetch_hero_icon_sales.
+    """
+    cutoff = datetime.now(pytz.timezone("Australia/Adelaide")).replace(tzinfo=None) - timedelta(hours=hours)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            query = """
                 SELECT
                     ms.card_id,
                     c.name,
@@ -720,9 +734,16 @@ def fetch_icon_fluctuations(platform="pc"):
                 JOIN cards c ON ms.card_id = c.card_id
                 WHERE ms.sold_price > 0
                   AND ms.platform = %s
+                  AND ms.sale_time >= %s
                   AND c.club IN ('HERO', 'EA FC ICONS')
-                  AND ms.sale_time >= NOW() - INTERVAL 6 HOUR
-            """, (platform,))
+            """
+            params = [platform, cutoff]
+
+            if card_type is not None:
+                query += " AND c.club = %s"
+                params.append(card_type)
+
+            cur.execute(query, params)
             return pd.DataFrame(cur.fetchall())
     finally:
         conn.close()

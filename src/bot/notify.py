@@ -1,6 +1,6 @@
 from src.bot.discord import send_message, get_or_create_tracker_channel, clear_channel
 from src.strategy.position_tracker import check_positions
-from src.strategy.deal_finder import icon_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy
+from src.strategy.deal_finder import icon_fluctuation_strategy, hero_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy
 
 # Send Message on Discord of all the Best Found Drop Deals
 async def notify_drop_deals(buy_df, plat):
@@ -22,13 +22,15 @@ async def notify_drop_deals(buy_df, plat):
 
 
 # Send Message on Discord of all the Best Found Icon Fluctuations - shares the
-# icon_{plat} channel with notify_icon_deals below, since both are icon signals.
-# NOTE: each of these two clears the channel before posting its own batch, so
-# if both run in the same cycle the second one wipes the first's messages -
-# don't enable both for the same platform unless that's what you want.
-async def notify_icon_fluctuations(plat):
+# icon_{plat} channel with notify_icon_deals below, since both are icon
+# signals. `clear` defaults to True for standalone use, but when both are
+# called in the same cycle (see main.py), only one of them should actually
+# clear the channel - otherwise whichever runs second wipes the first's
+# messages instead of both batches landing together.
+async def notify_icon_fluctuations(plat, clear=True):
     fluctuation_df = icon_fluctuation_strategy(plat)
-    await clear_channel(f"icon_{plat}")
+    if clear:
+        await clear_channel(f"icon_{plat}")
     if not fluctuation_df.empty:
         for _, row in fluctuation_df.head(5).iterrows():
             msg = (
@@ -44,12 +46,36 @@ async def notify_icon_fluctuations(plat):
         await send_message(f"**No icon fluctuation candidates found this hour on {plat.upper()}.**", f"icon_{plat}")
 
 
+# Same channel-sharing pattern as notify_icon_fluctuations above, for the
+# hero_{plat} channel shared with notify_hero_deals.
+async def notify_hero_fluctuations(plat, clear=True):
+    fluctuation_df = hero_fluctuation_strategy(plat)
+    if clear:
+        await clear_channel(f"hero_{plat}")
+    if not fluctuation_df.empty:
+        for _, row in fluctuation_df.head(5).iterrows():
+            msg = (
+                f"👑 **Hero Fluctuation on {plat.upper()}: {row['name']} ({row['version']})**\n"
+                f"🟢 Buy ~ {int(row['best_buy']):,}\n"
+                f"🔴 Sell ~ {int(row['best_sell']):,}\n"
+                f"📊 Latest Sale ~ {int(row['latest_sale']):,}\n"
+                f"📉 Spread ~ {row['spread_%']}%\n"
+                f"💰 Margin: {row['profit_margin_%']}%"
+            )
+            await send_message(msg, f"hero_{plat}")
+    else:
+        await send_message(f"**No hero fluctuation candidates found this hour on {plat.upper()}.**", f"hero_{plat}")
+
+
 # Hero and Icon dip alerts are kept in separate per-platform channels
 # (hero_pc/hero_ps, icon_pc/icon_ps - see DEAL_CHANNEL_IDS in discord.py)
-# rather than one mixed feed, so each is easy to watch on its own.
-async def notify_hero_deals(plat):
+# rather than one mixed feed, so each is easy to watch on its own. `clear`
+# works the same way as notify_hero_fluctuations/notify_icon_fluctuations -
+# see the note above notify_icon_fluctuations.
+async def notify_hero_deals(plat, clear=True):
     deals_df = hero_strategy(plat)
-    await clear_channel(f"hero_{plat}")
+    if clear:
+        await clear_channel(f"hero_{plat}")
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (
@@ -65,9 +91,10 @@ async def notify_hero_deals(plat):
         await send_message(f"**No Hero dip candidates found this hour on {plat.upper()}.**", f"hero_{plat}")
 
 
-async def notify_icon_deals(plat):
+async def notify_icon_deals(plat, clear=True):
     deals_df = icon_dip_strategy(plat)
-    await clear_channel(f"icon_{plat}")
+    if clear:
+        await clear_channel(f"icon_{plat}")
     if not deals_df.empty:
         for _, row in deals_df.head(5).iterrows():
             msg = (

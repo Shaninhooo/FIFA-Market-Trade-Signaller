@@ -3,7 +3,7 @@ from src.scraper import main_scrape
 from src.database.db_schema import initcardTable
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
-from src.bot.notify import notify_positions, notify_hero_deals, notify_icon_deals, notify_early_game_deals
+from src.bot.notify import notify_positions, notify_hero_deals, notify_icon_deals, notify_early_game_deals, notify_hero_fluctuations, notify_icon_fluctuations
 import asyncio
 
 SCRAPE_INTERVAL_SECONDS = 1800
@@ -46,9 +46,15 @@ async def repeated_loop():
                 # await notify_drop_deals(buy_df, platform)
                 await notify_early_game_deals(platform)
 
+                # Dip and fluctuation share hero_{plat}/icon_{plat} - only the
+                # first call in each pair clears the channel (clear=True,
+                # the default), so both batches land in the same post
+                # instead of the second one wiping the first's messages.
                 await notify_hero_deals(platform)
+                await notify_hero_fluctuations(platform, clear=False)
+
                 await notify_icon_deals(platform)
-                # await notify_icon_fluctuations(platform)
+                await notify_icon_fluctuations(platform, clear=False)
 
             # Then check everyone's open positions for sell opportunities
             # await position_check_all()
