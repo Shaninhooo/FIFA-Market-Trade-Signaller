@@ -97,14 +97,30 @@ def upsert_current_listings(entries, platform):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            values = [(card_id, platform, price) for card_id, price in entries]
-            cur.executemany("""
-                INSERT INTO current_listings (card_id, platform, cheapest_price, updated_at)
-                VALUES (%s, %s, %s, NOW())
-                ON DUPLICATE KEY UPDATE
-                    cheapest_price = VALUES(cheapest_price),
-                    updated_at = VALUES(updated_at)
-            """, values)
+            # Filter out any card_id current_listings can't reference yet -
+            # e.g. a brand new card appearing in live listings before the
+            # weekly metadata scraper has processed it into `cards`. Without
+            # this, one unknown card_id in the batch throws a foreign key
+            # error and, since nothing here commits until the end, silently
+            # discards every other valid listing in the same batch too.
+            card_ids_in_batch = list({card_id for card_id, price in entries})
+            placeholders = ",".join(["%s"] * len(card_ids_in_batch))
+            cur.execute(f"SELECT card_id FROM cards WHERE card_id IN ({placeholders})", card_ids_in_batch)
+            known_card_ids = {row["card_id"] for row in cur.fetchall()}
+
+            values = [(card_id, platform, price) for card_id, price in entries if card_id in known_card_ids]
+            skipped = len(entries) - len(values)
+            if skipped:
+                print(f"Skipped {skipped} listing(s) for card_id(s) not yet in cards table")
+
+            if values:
+                cur.executemany("""
+                    INSERT INTO current_listings (card_id, platform, cheapest_price, updated_at)
+                    VALUES (%s, %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        cheapest_price = VALUES(cheapest_price),
+                        updated_at = VALUES(updated_at)
+                """, values)
         conn.commit()
     finally:
         conn.close()

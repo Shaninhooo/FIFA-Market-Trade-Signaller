@@ -45,11 +45,15 @@ def collect_all_hrefs(version):
             # without it this endpoint returns an unfiltered, mixed-type listing, and
             # every row on it would get mislabeled with whatever `version` was passed in.
             if version == "icon":
-                url = f"{BASE_URL}/27/players?page={page_num}&league=2118"
+                url = f"{BASE_URL}/27/players?version=base_icon&page={page_num}"
             elif version == "hero":
-                url = f"{BASE_URL}/27/players?page={page_num}&club=114605"
+                url = f"{BASE_URL}/27/players?version=base_hero&page={page_num}"
             else:
-                url = f"{BASE_URL}/27/players?version={version}&page={page_num}"
+                # Filtering on ps_price rather than pc_price since PS runs
+                # cheaper - a card clearing the ps_price bar is virtually
+                # guaranteed to clear it on pc too, so this won't silently
+                # exclude a card that's cheap on ps but not on pc.
+                url = f"{BASE_URL}/27/players?version={version}&page={page_num}&ps_price=10000%2B"
             print(f"[Page {page_num}] Fetching {url}")
 
             html = fast_get(url)
@@ -218,92 +222,6 @@ def scrape_current_prices(version, max_pages=20):
     return prices
 
 
-def collect_all_hrefs_all_versions():
-    """Same as collect_all_hrefs, but doesn't need a caller-supplied version -
-    it crawls Futbin's unfiltered listing once and classifies each row's own
-    revision text into a version bucket, so one pass covers every version
-    instead of one crawl per version."""
-    hrefs = set()
-    new_hrefs = 0
-    conn = get_connection()
-
-    # Load existing hrefs from DB (not scoped to a version - a href is unique regardless of it)
-    with conn.cursor() as cur:
-        cur.execute("SELECT href FROM hrefs")
-        for row in cur.fetchall():
-            hrefs.add(row['href'])
-
-    page_num = 1
-
-    while True:
-        url = f"{BASE_URL}/27/players?page={page_num}"
-        print(f"[Page {page_num}] Fetching {url}")
-
-        html = fast_get(url)
-        if html is None:
-            print(f"Failed to fetch page {page_num}")
-            break
-
-        soup = BeautifulSoup(html, "html.parser")
-        rows = soup.find_all("tr", class_="player-row")
-
-        # Stop only when page has no rows at all
-        if not rows:
-            print(f"No player rows found, stopping at page {page_num}")
-            break
-
-        page_new_hrefs = 0
-        new_entries = []
-
-        for row in rows:
-            name_tag = row.find("a", class_="table-player-name")
-            if name_tag and "href" in name_tag.attrs:
-                href = name_tag["href"]
-                card_id = extract_card_id(href)
-                if card_id is None:
-                    continue  # href didn't match the expected /player/<id>/ format - nothing to key the row on
-                version_detail = row.find("div", class_="table-player-revision")
-                price = row.find("div", class_="price")
-                if version_detail is None or "SBC" in version_detail.get_text():
-                    continue
-                if price:
-                    price_val = price.get_text(strip=True).replace(",", "")
-                    if price_val == "0":
-                        continue
-                else:
-                    continue
-
-                version = classify_version(version_detail.get_text(strip=True))
-
-                if href not in hrefs:
-                    hrefs.add(href)
-                    page_new_hrefs += 1
-                    new_hrefs += 1
-                    new_entries.append((card_id, href, version))
-
-        if new_entries:
-            with conn.cursor() as cur:
-                cur.executemany("""
-                    INSERT INTO hrefs (card_id, href, version)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE href = VALUES(href), version = VALUES(version);
-                """, new_entries)
-            conn.commit()
-
-        print(f"Page {page_num}: collected {page_new_hrefs} new hrefs")
-
-        if page_num >= 100:
-            print("Reached page limit of 100, stopping")
-            break
-
-        page_num += 1
-        time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
-
-    print(f"Collected {new_hrefs} new hrefs in total.")
-    conn.close()
-    return list(hrefs)
-
-
 async def scrape_players(version):
 
     # Load hrefs
@@ -312,8 +230,10 @@ async def scrape_players(version):
     # collection time (classify_version has no "hero" bucket), so hero has
     # to be found by keyword against cards.version instead - see
     # fetch_ver_href's docstring for the tradeoff that comes with that.
-
-    hrefs = fetch_meta_hrefs(version, 10000)
+    if version != "gold":
+        hrefs = fetch_ver_href(version)
+    else:
+        hrefs = fetch_meta_hrefs(version, 10000)
     print(f"Loaded {len(hrefs)} {version} hrefs.")
 
     sem = asyncio.Semaphore(3)  # concurrency limit
@@ -746,10 +666,10 @@ async def quick_scrape():
         print("⚠️ Warmup solve failed — continuing anyway, workers will retry individually")
     
     # Collect Hrefs
-    # collect_all_hrefs("icon")
 
-    versions = ["icon", "hero", "team of the week"]
+    versions = ["icon", "hero"]
     for version in versions:
+
         await scrape_players(version)
 
         # One crawl yields both platforms - see scrape_current_prices docstring.
@@ -770,7 +690,7 @@ async def slow_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-    versions = ["gold"]
+    versions = ["gold", "team of the week"]
     for version in versions:
         await scrape_players(version)
 
