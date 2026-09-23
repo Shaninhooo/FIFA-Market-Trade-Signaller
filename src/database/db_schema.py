@@ -160,6 +160,21 @@ def initcardTable():
         )
     """)
 
+    # current_listings - live, not-yet-sold BIN price per card/platform.
+    # Unlike market_sales (append-only history of completed transactions),
+    # this is a snapshot: each scrape overwrites the existing row via
+    # INSERT ... ON DUPLICATE KEY UPDATE rather than inserting a new one.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS current_listings (
+            card_id INT NOT NULL,
+            platform VARCHAR(20) NOT NULL,
+            cheapest_price INT NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (card_id, platform),
+            FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE
+        )
+    """)
+
     # recurring_events
     cur.execute("""
         CREATE TABLE IF NOT EXISTS recurring_events (

@@ -4,7 +4,7 @@ import os
 import pytz
 from datetime import datetime
 from dotenv import load_dotenv
-from src.database.db_utils import fetch_drop_candidates, fetch_fluctuation_sales, fetch_hero_icon_sales, fetch_upcoming_events, fetch_daily_price_history
+from src.database.db_utils import fetch_drop_candidates, fetch_fluctuation_sales, fetch_hero_icon_sales, fetch_upcoming_events, fetch_daily_price_history, fetch_current_listings
 import asyncio
 
 # ------------------- STRATEGIES -------------------
@@ -60,6 +60,41 @@ def get_thresholds(price):
         return 5, 8
     else:                      # cheap fodder
         return 10, 14
+
+
+def _merge_live_price(df, platform):
+    """
+    Left-joins current_listings' live cheapest-listed price onto a
+    candidates df by card_id, dropping card_id afterward since it isn't
+    otherwise part of any strategy's output.
+
+    A strategy's own suggested_buy/best_buy is an estimate derived from
+    recent completed sales; a live listing is what's actually buyable
+    right now, so callers should prefer it where present. It can be
+    missing per-card even when current_listings has data (nothing
+    currently listed, or the scrape just hasn't caught up yet) - callers
+    must handle that via the added buy_price_source column rather than
+    assuming live_price is always populated.
+
+    Adds two columns: live_price (NaN where nothing's currently listed)
+    and buy_price_source ("live" or "sold_avg").
+    """
+    if df.empty:
+        return df
+
+    listings = fetch_current_listings(platform)
+    if listings.empty:
+        df["live_price"] = np.nan
+    else:
+        df = df.merge(
+            listings[["card_id", "cheapest_price"]].rename(columns={"cheapest_price": "live_price"}),
+            on="card_id", how="left"
+        )
+
+    df["buy_price_source"] = np.where(df["live_price"].notna(), "live", "sold_avg")
+    df = df.drop(columns=["card_id"])
+    return df
+
 
 def drop_strategy(platform, apply_event_gate=True):
 
@@ -158,6 +193,7 @@ def drop_strategy(platform, apply_event_gate=True):
             continue
  
         buy_candidates.append({
+            "card_id": card_id,
             "name": group.iloc[0]["name"],
             "version": group.iloc[0]["version"],
             "last_short_avg": round(last_short_avg, 2),
@@ -175,13 +211,25 @@ def drop_strategy(platform, apply_event_gate=True):
         })
  
     buy_df = pd.DataFrame(buy_candidates)
- 
+    buy_df = _merge_live_price(buy_df, platform)
+
+    if not buy_df.empty:
+        has_live = buy_df["live_price"].notna()
+        buy_df.loc[has_live, "suggested_buy"] = buy_df.loc[has_live, "live_price"].round().astype(int)
+        buy_df["potential_profit"] = buy_df["suggested_sell_after_tax"] - buy_df["suggested_buy"]
+        buy_df["profit_margin_%"] = (buy_df["potential_profit"] / buy_df["suggested_buy"] * 100).round(2)
+        # Re-apply this strategy's own margin floor - a live price can be
+        # higher than the sold-avg estimate and push a candidate below the
+        # bar it originally cleared using that estimate.
+        buy_df = buy_df[buy_df["profit_margin_%"] >= 3]
+        buy_df = buy_df.drop(columns=["live_price"])
+
     if not buy_df.empty:
         rating_order = {"🔥 High": 3, "⚡ Medium": 2, "⚠️ Pending event - verify before buying": 1}
         buy_df["rating_priority"] = buy_df["investment_rating"].map(rating_order).fillna(0)
         buy_df = buy_df.sort_values(["rating_priority", "z_score"], ascending=[False, False])
         buy_df = buy_df.drop(columns=["rating_priority"])
- 
+
     return buy_df
 
 
@@ -258,6 +306,7 @@ def _hero_icon_dip_strategy(platform, card_type, label):
             continue
 
         candidates.append({
+            "card_id": card_id,
             "name": group.iloc[0]["name"],
             "version": group.iloc[0]["version"],
             "rating": group.iloc[0]["rating"],
@@ -275,6 +324,17 @@ def _hero_icon_dip_strategy(platform, card_type, label):
         })
 
     candidates_df = pd.DataFrame(candidates)
+    candidates_df = _merge_live_price(candidates_df, platform)
+
+    if not candidates_df.empty:
+        has_live = candidates_df["live_price"].notna()
+        candidates_df.loc[has_live, "suggested_buy"] = candidates_df.loc[has_live, "live_price"].round().astype(int)
+        candidates_df["potential_profit"] = candidates_df["suggested_sell_after_tax"] - candidates_df["suggested_buy"]
+        candidates_df["profit_margin_%"] = (candidates_df["potential_profit"] / candidates_df["suggested_buy"] * 100).round(2)
+        # Re-apply this strategy's own margin floor - see drop_strategy's
+        # equivalent note.
+        candidates_df = candidates_df[candidates_df["profit_margin_%"] >= 5]
+        candidates_df = candidates_df.drop(columns=["live_price"])
 
     if not candidates_df.empty:
         rating_order = {"🔥 High": 2, "⚡ Medium": 1}
@@ -342,6 +402,7 @@ def _fluctuation_strategy(platform, card_type, label):
             # Only keep if latest price is at or below suggested buy price
             if profit_margin > 8 and latest_price < 500000:
                 fluctuation_candidates.append({
+                    "card_id": card_id,
                     "name": latest_name,
                     "version": latest_version,
                     "latest_sale": latest_price,
@@ -357,6 +418,21 @@ def _fluctuation_strategy(platform, card_type, label):
 
     # Convert to DataFrame
     fluctuation_df = pd.DataFrame(fluctuation_candidates)
+    fluctuation_df = _merge_live_price(fluctuation_df, platform)
+
+    if not fluctuation_df.empty:
+        has_live = fluctuation_df["live_price"].notna()
+        fluctuation_df.loc[has_live, "best_buy"] = fluctuation_df.loc[has_live, "live_price"].round().astype(int)
+        # best_sell is pre-tax (see best_sell computation above) - tax is
+        # applied inline here rather than stored as a separate column, same
+        # as the original profit_margin calculation this mirrors.
+        fluctuation_df["profit_margin_%"] = (
+            (fluctuation_df["best_sell"] * 0.95 - fluctuation_df["best_buy"]) / fluctuation_df["best_buy"] * 100
+        ).round(2)
+        # Re-apply this strategy's own margin floor - see drop_strategy's
+        # equivalent note.
+        fluctuation_df = fluctuation_df[fluctuation_df["profit_margin_%"] > 8]
+        fluctuation_df = fluctuation_df.drop(columns=["live_price"])
 
     if not fluctuation_df.empty:
         # Sort by how close latest price is to buy price
@@ -366,7 +442,7 @@ def _fluctuation_strategy(platform, card_type, label):
         display_cols = [
             "name", "version", "latest_sale", "best_buy", "best_sell",
             "avg_price", "min_price", "max_price", "spread_%",
-            "sales_volume", "profit_margin_%"
+            "sales_volume", "profit_margin_%", "buy_price_source"
         ]
         fluctuation_df = fluctuation_df[display_cols]
 
@@ -496,6 +572,7 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
         latest_price = prices[-1]
 
         candidates.append({
+            "card_id": card_id,
             "name": group.iloc[-1]["name"],
             "version": group.iloc[-1]["version"],
             "days_live": len(group),
@@ -509,8 +586,15 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
         })
 
     candidates_df = pd.DataFrame(candidates)
+    candidates_df = _merge_live_price(candidates_df, platform)
 
     if not candidates_df.empty:
+        # No sell target/margin here (see docstring - this is a buy-only
+        # signal), so unlike the other strategies there's no profit floor
+        # to re-check after swapping in the live price.
+        has_live = candidates_df["live_price"].notna()
+        candidates_df.loc[has_live, "suggested_buy"] = candidates_df.loc[has_live, "live_price"].round().astype(int)
+        candidates_df = candidates_df.drop(columns=["live_price"])
         candidates_df = candidates_df.sort_values("latest_daily_change_%")
 
     return candidates_df

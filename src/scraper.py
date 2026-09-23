@@ -11,7 +11,7 @@ import re
 import pytz
 import aiohttp
 from src.flaresolverr import fast_get, async_fast_get
-from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_ver_href, insert_unique_event, insert_hrefs_batch, load_existing_hrefs
+from src.database.db_utils import insert_card_stats, insert_card, insert_card_playstyles, insert_card_roles, async_insert_sale_db, get_connection, fetch_meta_hrefs, fetch_all_hrefs, fetch_ver_href, insert_unique_event, insert_hrefs_batch, load_existing_hrefs, async_upsert_current_listings
 BASE_URL = "https://www.futbin.com"
 FLARESOLVERR_MAX_TIMEOUT_MS = 60000
 
@@ -33,6 +33,7 @@ def classify_version(revision_text: str) -> str:
 
 
 def collect_all_hrefs(version):
+    version = version.replace(" ", "_")  # Futbin's ?version= filter uses underscores, not spaces
     conn = get_connection()
     try:
         hrefs = load_existing_hrefs(conn, version)
@@ -105,6 +106,116 @@ def collect_all_hrefs(version):
         return list(hrefs)
     finally:
         conn.close()
+
+
+def _parse_futbin_price(text):
+    """Futbin's listing-page price column uses K/M-abbreviated notation
+    ("188K", "1.31M") rather than the plain comma-grouped digits market_sales
+    prices use elsewhere in this scraper - a straight int()/isdigit() check
+    silently rejects every abbreviated value. Returns None if unparseable."""
+    text = text.strip().upper().replace(",", "")
+    if not text:
+        return None
+    multiplier = 1
+    if text.endswith("K"):
+        multiplier, text = 1_000, text[:-1]
+    elif text.endswith("M"):
+        multiplier, text = 1_000_000, text[:-1]
+    try:
+        return int(round(float(text) * multiplier))
+    except ValueError:
+        return None
+
+
+def scrape_current_prices(version, max_pages=20):
+    """
+    Crawls Futbin's player-listing pages - same pages/pagination as
+    collect_all_hrefs - but keeps each row's currently-listed prices instead
+    of discarding them after the zero-price filter. One request per page
+    covers dozens of players, so this is far cheaper per-card than fetching
+    scrape_player's per-player page every cycle just for a live price.
+
+    Every row server-renders BOTH platforms' price cells at once
+    (<td class="... platform-pc-only">/<td class="... platform-ps-only">) -
+    the platform toggle button on the site only flips a cookie that CSS/JS
+    uses client-side to hide one of them, it doesn't change what the server
+    sends. So there's no platform selection to make on our end either -
+    one crawl yields both platforms, instead of needing to fetch every page
+    twice (confirmed by diffing an actual pc vs ps response: identical
+    HTML aside from noise, both <td>s present in each either way).
+
+    Unlike market_sales (past completed sales), this reflects what's on
+    the market right now, un-sold - see current_listings in db_schema.py.
+
+    max_pages is much lower than collect_all_hrefs' 100-page cap on purpose:
+    that crawl runs once to discover hrefs, this one repeats every scrape
+    cycle (every 30min-2h), so the same page count costs far more requests
+    over time.
+
+    Returns {"pc": [(card_id, price), ...], "ps": [(card_id, price), ...]}.
+    """
+    prices = {"pc": [], "ps": []}
+    page_num = 1
+    version = version.replace(" ", "_")  # Futbin's ?version= filter uses underscores, not spaces
+
+    while True:
+        if version == "icon":
+            url = f"{BASE_URL}/27/players?version=base_icon&page={page_num}"
+        elif version == "hero":
+            url = f"{BASE_URL}/27/players?version=base_hero&page={page_num}"
+        else:
+            # Filtering on ps_price rather than pc_price since PS runs
+            # cheaper - a card clearing the ps_price bar is virtually
+            # guaranteed to clear it on pc too, so this won't silently
+            # exclude a card that's cheap on ps but not on pc.
+            url = f"{BASE_URL}/27/players?version={version}&page={page_num}&ps_price=10000%2B"
+
+        print(f"[Prices][{version}] Fetching page {page_num}")
+        html = fast_get(url)
+        if html is None:
+            print(f"Failed to fetch price page {page_num} ({version})")
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr", class_="player-row")
+
+        if not rows:
+            print(f"No player rows found, stopping at page {page_num}")
+            break
+
+        for row in rows:
+            name_tag = row.find("a", class_="table-player-name")
+            if not name_tag or "href" not in name_tag.attrs:
+                continue
+
+            card_id = extract_card_id(name_tag["href"])
+            if card_id is None:
+                continue
+
+            version_detail = row.find("div", class_="table-player-revision")
+            if version_detail is None or "SBC" in version_detail.get_text():
+                continue
+
+            for platform, cell_class in (("pc", "platform-pc-only"), ("ps", "platform-ps-only")):
+                cell = row.find("td", class_=cell_class)
+                price_tag = cell.find("div", class_="price") if cell else None
+                if price_tag is None:
+                    continue
+
+                price_val = _parse_futbin_price(price_tag.get_text(strip=True))
+                if not price_val:
+                    continue  # unparseable, or "0" (unlisted/untradeable right now)
+
+                prices[platform].append((card_id, price_val))
+
+        if page_num >= max_pages:
+            print(f"Reached page limit of {max_pages}, stopping")
+            break
+
+        page_num += 1
+        time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
+
+    return prices
 
 
 def collect_all_hrefs_all_versions():
@@ -451,6 +562,7 @@ def scrape_player(href):
         "height": height,
         "accelerate": accelerate
     }
+
     
     return {
         "id": card_id,
@@ -626,7 +738,7 @@ def scrape_events(year=None):
 
 
 # Execute Hourly Scrape
-async def main_scrape():
+async def quick_scrape():
     # Solve once, up front, so all workers below start with a warm cookie
     # cache instead of racing to refresh it simultaneously on a cold start.
     warmup_ok = await asyncio.to_thread(fast_get, f"{BASE_URL}/27/players?version=gold&page=1")
@@ -636,9 +748,37 @@ async def main_scrape():
     # Collect Hrefs
     # collect_all_hrefs("icon")
 
-    versions = ["gold", "icon", "hero", "week"]
+    versions = ["icon", "hero", "team of the week"]
     for version in versions:
         await scrape_players(version)
-    
+
+        # One crawl yields both platforms - see scrape_current_prices docstring.
+        prices_by_platform = await asyncio.to_thread(scrape_current_prices, version)
+        for platform, prices in prices_by_platform.items():
+            await async_upsert_current_listings(prices, platform)
+
     print("✅ Scraping complete.")
+
+
+async def slow_scrape():
+    # Solve once, up front, so all workers below start with a warm cookie
+    # cache instead of racing to refresh it simultaneously on a cold start.
+    warmup_ok = await asyncio.to_thread(fast_get, f"{BASE_URL}/27/players?version=gold&page=1")
+    if warmup_ok is None:
+        print("⚠️ Warmup solve failed — continuing anyway, workers will retry individually")
+    
+    # Collect Hrefs
+    # collect_all_hrefs("icon")
+
+    versions = ["gold"]
+    for version in versions:
+        await scrape_players(version)
+
+        # One crawl yields both platforms - see scrape_current_prices docstring.
+        prices_by_platform = await asyncio.to_thread(scrape_current_prices, version)
+        for platform, prices in prices_by_platform.items():
+            await async_upsert_current_listings(prices, platform)
+
+    print("✅ Scraping complete.")
+
 

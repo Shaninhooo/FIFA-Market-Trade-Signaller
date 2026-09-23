@@ -84,6 +84,58 @@ async def async_insert_sale_db(card_id, sale_data):
     await asyncio.to_thread(insert_sale_db, card_id, sale_data)
 
 
+def upsert_current_listings(entries, platform):
+    """
+    Overwrites the current cheapest-listed price per card/platform in place
+    (ON DUPLICATE KEY UPDATE) rather than accumulating rows like
+    market_sales - current_listings is a live snapshot, not a history table.
+
+    entries: list of (card_id, price) tuples for a single platform.
+    """
+    if not entries:
+        return
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            values = [(card_id, platform, price) for card_id, price in entries]
+            cur.executemany("""
+                INSERT INTO current_listings (card_id, platform, cheapest_price, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON DUPLICATE KEY UPDATE
+                    cheapest_price = VALUES(cheapest_price),
+                    updated_at = VALUES(updated_at)
+            """, values)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def async_upsert_current_listings(entries, platform):
+    await asyncio.to_thread(upsert_current_listings, entries, platform)
+
+
+def fetch_current_listings(platform):
+    """
+    Latest cheapest-listed price per card for a platform, from the
+    current_listings snapshot (see upsert_current_listings/db_schema.py).
+    Unlike market_sales, this reflects what's actually listed right now,
+    un-sold - the strategies in deal_finder.py use it to anchor a buy
+    signal to a real, currently-buyable price instead of an estimate
+    derived from recent completed sales.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_id, cheapest_price, updated_at
+                FROM current_listings
+                WHERE platform = %s
+            """, (platform,))
+            return pd.DataFrame(cur.fetchall())
+    finally:
+        conn.close()
+
+
 def insert_card(card_id, card_details, game_num):
     conn = get_connection()
     try:
@@ -529,6 +581,25 @@ def fetch_closed_positions(user_id, limit=10):
 
 
 def fetch_meta_hrefs(version, min_price=10000):
+    """
+    Cards worth scraping sales for - fodder below min_price isn't. Checks
+    two independent signals, either of which qualifies a card:
+
+    - current_listings (live, refreshed every scrape cycle): catches cards
+      that are valuable right now, even if they haven't personally traded
+      in a while.
+    - market_sales, unbounded (no time window): catches cards that have
+      EVER sold above min_price, so a card that's gone extinct (all supply
+      consumed via SBCs, nobody currently listing it) doesn't silently drop
+      out just because current_listings has nothing for it - extinct cards
+      are often the most interesting case, since scarcity is exactly what
+      spikes price once supply hits zero. Relying on current_listings
+      alone would exclude them the moment listings dry up.
+
+    MAX() across platforms (both signals) so a card only needs to clear
+    the bar on one platform (ps, the cheaper one, in practice) to qualify -
+    see scrape_current_prices' ps_price filter for the same reasoning.
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -536,13 +607,12 @@ def fetch_meta_hrefs(version, min_price=10000):
                 SELECT h.href
                 FROM hrefs h
                 JOIN cards c ON h.card_id = c.card_id
-                LEFT JOIN market_sales ms 
-                    ON c.card_id = ms.card_id 
-                    AND ms.sale_time >= NOW() - INTERVAL 12 HOUR
+                LEFT JOIN current_listings cl ON cl.card_id = c.card_id
+                LEFT JOIN market_sales ms ON ms.card_id = c.card_id
                 WHERE c.version LIKE %s
                 GROUP BY h.href
-                HAVING AVG(ms.sold_price) > %s
-            """, (f"%{version}%", min_price))
+                HAVING MAX(cl.cheapest_price) > %s OR MAX(ms.sold_price) > %s
+            """, (f"%{version}%", min_price, min_price))
             rows = cur.fetchall()
             return [row['href'] for row in rows]
     finally:

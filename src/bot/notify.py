@@ -2,6 +2,14 @@ from src.bot.discord import send_message, get_or_create_tracker_channel, clear_c
 from src.strategy.position_tracker import check_positions
 from src.strategy.deal_finder import icon_fluctuation_strategy, hero_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy
 
+
+def _buy_tag(row):
+    """Labels a buy price as a real live listing vs. a sold-price estimate -
+    see buy_price_source in deal_finder.py's _merge_live_price. current_listings
+    can lag or simply not have a card yet, so this isn't always "live"."""
+    return "live listing" if row.get("buy_price_source") == "live" else "est. from sales"
+
+
 # Send Message on Discord of all the Best Found Drop Deals
 async def notify_drop_deals(buy_df, plat):
     await clear_channel(f"gold_{plat}")
@@ -11,7 +19,7 @@ async def notify_drop_deals(buy_df, plat):
                 f"📊 **{plat.upper()} Deal Alert!**\n"
                 f"🎴 Card: {row['name']} ({row['version']})\n"
                 f"📉 Drop: {row['drop_%']}%\n"
-                f"🟢 Buy ~ {row['suggested_buy']:,}\n"
+                f"🟢 Buy ~ {row['suggested_buy']:,} ({_buy_tag(row)})\n"
                 f"🔴 Sell ~ {row['suggested_sell_raw']:,}\n"
                 f"💰 Profit: {row['potential_profit']:,} ({row['profit_margin_%']}%)\n"
                 f"🏷️ Rating: {row['investment_rating']}"
@@ -35,7 +43,7 @@ async def notify_icon_fluctuations(plat, clear=True):
         for _, row in fluctuation_df.head(5).iterrows():
             msg = (
                 f"💎 **Icon Fluctuation on {plat.upper()}: {row['name']} ({row['version']})**\n"
-                f"🟢 Buy ~ {int(row['best_buy']):,}\n"
+                f"🟢 Buy ~ {int(row['best_buy']):,} ({_buy_tag(row)})\n"
                 f"🔴 Sell ~ {int(row['best_sell']):,}\n"
                 f"📊 Latest Sale ~ {int(row['latest_sale']):,}\n"
                 f"📉 Spread ~ {row['spread_%']}%\n"
@@ -56,7 +64,7 @@ async def notify_hero_fluctuations(plat, clear=True):
         for _, row in fluctuation_df.head(5).iterrows():
             msg = (
                 f"👑 **Hero Fluctuation on {plat.upper()}: {row['name']} ({row['version']})**\n"
-                f"🟢 Buy ~ {int(row['best_buy']):,}\n"
+                f"🟢 Buy ~ {int(row['best_buy']):,} ({_buy_tag(row)})\n"
                 f"🔴 Sell ~ {int(row['best_sell']):,}\n"
                 f"📊 Latest Sale ~ {int(row['latest_sale']):,}\n"
                 f"📉 Spread ~ {row['spread_%']}%\n"
@@ -81,7 +89,7 @@ async def notify_hero_deals(plat, clear=True):
             msg = (
                 f"👑 **Hero Dip on {plat.upper()}: {row['name']} ({row['version']}, {row['rating']} OVR)**\n"
                 f"📉 Drop: {row['drop_%']}% (last {row['recent_sales']} sale(s) vs {row['baseline_sales']}-sale baseline)\n"
-                f"🟢 Buy ~ {row['suggested_buy']:,}\n"
+                f"🟢 Buy ~ {row['suggested_buy']:,} ({_buy_tag(row)})\n"
                 f"🔴 Sell ~ {row['suggested_sell_raw']:,}\n"
                 f"💰 Profit: {row['potential_profit']:,} ({row['profit_margin_%']}%)\n"
                 f"🏷️ Rating: {row['investment_rating']}"
@@ -100,7 +108,7 @@ async def notify_icon_deals(plat, clear=True):
             msg = (
                 f"💎 **Icon Dip on {plat.upper()}: {row['name']} ({row['version']}, {row['rating']} OVR)**\n"
                 f"📉 Drop: {row['drop_%']}% (last {row['recent_sales']} sale(s) vs {row['baseline_sales']}-sale baseline)\n"
-                f"🟢 Buy ~ {row['suggested_buy']:,}\n"
+                f"🟢 Buy ~ {row['suggested_buy']:,} ({_buy_tag(row)})\n"
                 f"🔴 Sell ~ {row['suggested_sell_raw']:,}\n"
                 f"💰 Profit: {row['potential_profit']:,} ({row['profit_margin_%']}%)\n"
                 f"🏷️ Rating: {row['investment_rating']}"
@@ -125,7 +133,7 @@ async def notify_early_game_deals(plat):
                 f"🌱 **Early-Game Signal on {plat.upper()}: {row['name']} ({row['version']})**\n"
                 f"📉 Trend: {row['prior_daily_change_%']}% → {row['latest_daily_change_%']}% day-over-day (decelerating)\n"
                 f"📅 Days live: {row['days_live']}\n"
-                f"🟢 Suggested Buy ~ {row['suggested_buy']:,}"
+                f"🟢 Suggested Buy ~ {row['suggested_buy']:,} ({_buy_tag(row)})"
             )
             await send_message(msg, f"gold_{plat}")
     else:
