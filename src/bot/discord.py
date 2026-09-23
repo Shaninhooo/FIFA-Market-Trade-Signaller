@@ -16,19 +16,33 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 
+_startup_done = False
+
+
 @client.event
 async def on_ready():
+    # client.start()'s default reconnect=True means on_ready fires again on
+    # every dropped-and-restored gateway connection, not just the first
+    # login - without this guard, the card cache refresh and command sync
+    # below (and their "Logged in as..." log line) would silently repeat on
+    # every reconnect, which looks like the bot "starting twice".
+    global _startup_done
+    if _startup_done:
+        print(f"Reconnected as {client.user}")
+        return
+
     await asyncio.to_thread(refresh_card_cache)  # no conn argument anymore
     synced = await tree.sync(guild=GUILD_ID)
     print(f"Logged in as {client.user} - synced {len(synced)} command(s)")
-    
+    _startup_done = True
+
     # channel = client.get_channel(CHANNEL_ID)
-    
+
     # if channel:
     #     # Only delete messages that are not pinned
     #     deleted = await channel.purge(limit=1000, check=lambda m: not m.pinned)
     #     print(f"Deleted {len(deleted)} messages (pinned messages preserved)")
-    
+
 
 # ------------------- BOT FUNCTIONS -------------------
 

@@ -159,6 +159,7 @@ def scrape_current_prices(version, max_pages=20):
     Returns {"pc": [(card_id, price), ...], "ps": [(card_id, price), ...]}.
     """
     prices = {"pc": [], "ps": []}
+    hrefs_by_card_id = {}
     page_num = 1
     version = version.replace(" ", "_")  # Futbin's ?version= filter uses underscores, not spaces
 
@@ -200,6 +201,8 @@ def scrape_current_prices(version, max_pages=20):
             if version_detail is None or "SBC" in version_detail.get_text():
                 continue
 
+            hrefs_by_card_id[card_id] = name_tag["href"]
+
             for platform, cell_class in (("pc", "platform-pc-only"), ("ps", "platform-ps-only")):
                 cell = row.find("td", class_=cell_class)
                 price_tag = cell.find("div", class_="price") if cell else None
@@ -219,7 +222,63 @@ def scrape_current_prices(version, max_pages=20):
         page_num += 1
         time.sleep(random.uniform(0.5, 1.5))  # don't hammer the listing pages
 
+    _backfill_missing_cards(hrefs_by_card_id, version)
+
     return prices
+
+
+def _backfill_missing_cards(hrefs_by_card_id, version):
+    """
+    scrape_current_prices sees every card on Futbin's listing pages,
+    independent of whichever cards scrape_players' href-based pipeline has
+    already pulled full metadata for - a card can show up here before it's
+    ever gone through that pipeline (brand new, or just never cleared
+    fetch_meta_hrefs' price bar until now). Without this, current_listings'
+    cards-table FK filter (see upsert_current_listings) silently drops that
+    price data forever, with no path for the card to ever catch up.
+
+    Backfills full metadata (same insert_card/_stats/_roles/_playstyles
+    calls scrape_players' process_player makes for a brand new href) and
+    registers the href, so the card becomes trackable going forward exactly
+    like a normally-discovered one.
+    """
+    if not hrefs_by_card_id:
+        return
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(hrefs_by_card_id))
+            cur.execute(
+                f"SELECT card_id FROM cards WHERE card_id IN ({placeholders})",
+                list(hrefs_by_card_id.keys()),
+            )
+            known_ids = {row["card_id"] for row in cur.fetchall()}
+
+        missing = {cid: href for cid, href in hrefs_by_card_id.items() if cid not in known_ids}
+        if not missing:
+            return
+
+        print(f"[Prices][{version}] Backfilling metadata for {len(missing)} card(s) missing from cards table")
+
+        new_entries = []
+        for card_id, href in missing.items():
+            metadata = scrape_player(href)
+            if not metadata:
+                print(f"Skipped backfill for card {card_id} ({href}) - metadata could not be scraped")
+                continue
+
+            insert_card(card_id, metadata["details"], "27")
+            insert_card_stats(card_id, metadata["stats"])
+            insert_card_roles(card_id, metadata["roles"])
+            insert_card_playstyles(card_id, metadata["playstyles"])
+            new_entries.append((card_id, href, version))
+
+            time.sleep(random.uniform(0.5, 1.5))  # don't hammer scrape_player's per-player page
+
+        insert_hrefs_batch(conn, new_entries)
+    finally:
+        conn.close()
 
 
 async def scrape_players(version):
