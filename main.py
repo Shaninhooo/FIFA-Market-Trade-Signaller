@@ -3,7 +3,7 @@ from src.scraper import slow_scrape, quick_scrape
 from src.database.db_schema import initcardTable
 from src.bot.discord import client, DISCORD_TOKEN, GUILD_ID
 from src.database.db_utils import fetch_trackable_users
-from src.bot.notify import notify_positions, notify_hero_deals, notify_icon_deals, notify_early_game_deals, notify_hero_fluctuations, notify_icon_fluctuations
+from src.bot.notify import notify_positions, notify_hero_deals, notify_icon_deals, notify_drop_deals, notify_hero_fluctuations, notify_icon_fluctuations
 import asyncio
 import traceback
 
@@ -44,8 +44,7 @@ async def slow_repeated_loop():
             platforms = ["pc", "ps"]
             for platform in platforms:
 
-                # await notify_drop_deals(buy_df, platform)
-                await notify_early_game_deals(platform)
+                await notify_drop_deals(platform)
 
         except Exception as e:
             print(f"Hourly loop error: {e}")  # log and continue - see note below on why this matters

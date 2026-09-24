@@ -1,6 +1,6 @@
 from src.bot.discord import send_message, get_or_create_tracker_channel, clear_channel
 from src.strategy.position_tracker import check_positions
-from src.strategy.deal_finder import icon_fluctuation_strategy, hero_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy
+from src.strategy.deal_finder import icon_fluctuation_strategy, hero_fluctuation_strategy, hero_strategy, icon_dip_strategy, early_game_strategy, drop_strategy
 
 
 def _buy_tag(row):
@@ -11,7 +11,8 @@ def _buy_tag(row):
 
 
 # Send Message on Discord of all the Best Found Drop Deals
-async def notify_drop_deals(buy_df, plat):
+async def notify_drop_deals(plat):
+    buy_df = drop_strategy(plat)
     await clear_channel(f"gold_{plat}")
     if not buy_df.empty:
         for _, row in buy_df.head(5).iterrows():
@@ -24,6 +25,12 @@ async def notify_drop_deals(buy_df, plat):
                 f"💰 Profit: {row['potential_profit']:,} ({row['profit_margin_%']}%)\n"
                 f"🏷️ Rating: {row['investment_rating']}"
             )
+            if row.get("next_event_name"):
+                days = row["days_until_event"]
+                when = "active now" if days <= 0 else f"in {days}d"
+                msg += f"\n📅 Next known event: {row['next_event_name']} ({when})"
+            if row.get("event_pending"):
+                msg += "\n⚠️ Event active/imminent - elite-card dip may be event-driven, not mean-reversion, verify before buying"
             await send_message(msg, f"gold_{plat}")
     else:
         await send_message(f"No Dip Buy candidates found within current hour on {plat.upper()}.", f"gold_{plat}")
@@ -135,6 +142,12 @@ async def notify_early_game_deals(plat):
                 f"📅 Days live: {row['days_live']}\n"
                 f"🟢 Suggested Buy ~ {row['suggested_buy']:,} ({_buy_tag(row)})"
             )
+            if row.get("next_event_name"):
+                days = row["days_until_event"]
+                when = "active now" if days <= 0 else f"in {days}d"
+                msg += f"\n📅 Next known event: {row['next_event_name']} ({when})"
+            if row.get("event_pending"):
+                msg += "\n⚠️ Event active/imminent - fresh supply may break this 'bottoming out' read, verify before buying"
             await send_message(msg, f"gold_{plat}")
     else:
         await send_message(f"**No early-game buy candidates found this hour on {plat.upper()}.**", f"gold_{plat}")

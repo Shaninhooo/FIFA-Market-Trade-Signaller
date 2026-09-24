@@ -30,6 +30,18 @@ MIN_BASELINE_SALES = 6
 MIN_RECENT_SALES = 2
 HERO_ICON_MIN_PRICE = 15_000
 
+# Shared by drop_strategy and early_game_strategy's event gates.
+# How far ahead to look for informational purposes - matches how far in
+# advance the event scraper typically has a promo's start_datetime populated.
+# Kept wide so "days until next event" is always shown, even when it's not
+# close enough to distrust the signal over.
+EVENT_LOOKAHEAD_HOURS = 24 * 7
+# How close a known event has to be before a signal is considered
+# untrustworthy (vs. just informational). A threshold this wide would flag
+# almost every candidate given events recur roughly weekly, turning the
+# warning into noise - see event_pending derivation in each strategy.
+EVENT_PENDING_HOURS = 48
+
 def get_z_thresholds(price):
     """
     Returns (medium_z, high_z): how many standard deviations below the
@@ -125,14 +137,30 @@ def drop_strategy(platform, apply_event_gate=True):
     ]
  
     # Pull pending events ONCE per call, not once per card in the loop below.
-    # See fetch_upcoming_events() note at the bottom of this file - it needs
-    # to be added to db_utils.py, it doesn't exist there yet.
-    # upcoming_events = (
-    #     fetch_upcoming_events(lookahead_hours=EVENT_LOOKAHEAD_HOURS)
-    #     if apply_event_gate else pd.DataFrame()
-    # )
-    # event_pending = not upcoming_events.empty
- 
+    # Same two-tier approach as early_game_strategy: a wide, informational
+    # lookahead for "days until next event" plus a tight window for actually
+    # distrusting the signal - see EVENT_LOOKAHEAD_HOURS/EVENT_PENDING_HOURS
+    # above for the full reasoning on why the gate window has to stay narrow.
+    next_event = None
+    if apply_event_gate:
+        now_uk = datetime.now(pytz.timezone("Europe/London")).replace(tzinfo=None)
+        upcoming_events = fetch_upcoming_events(lookahead_hours=EVENT_LOOKAHEAD_HOURS)
+        active_or_future = [
+            e for e in upcoming_events if e["source"] == "unique" and e["end"] >= now_uk
+        ]
+        if active_or_future:
+            next_event = min(active_or_future, key=lambda e: e["start"])
+
+    if next_event is not None:
+        hours_until_event = (next_event["start"] - now_uk).total_seconds() / 3600
+        days_until_event = round(hours_until_event / 24, 1)
+        event_pending = hours_until_event <= EVENT_PENDING_HOURS
+        next_event_name = next_event["event_name"]
+    else:
+        days_until_event = None
+        event_pending = False
+        next_event_name = None
+
     buy_candidates = []
  
     for card_id, group in short_df.groupby('card_id'):
@@ -178,9 +206,9 @@ def drop_strategy(platform, apply_event_gate=True):
         # This flags rather than hard-skips - your call whether to act on
         # it, but it stops the tool from presenting it with full confidence.
         is_elite = last_long_avg >= 200_000
-        # card_event_pending = apply_event_gate and event_pending and is_elite
-        # if card_event_pending:
-        #     rating = "⚠️ Pending event - verify before buying"
+        card_event_pending = event_pending and is_elite
+        if card_event_pending:
+            rating = "⚠️ Pending event - verify before buying"
  
         buy_price = round(last_short_avg * 0.97)
         raw_sell_price = round(last_long_avg * 0.98)
@@ -207,7 +235,9 @@ def drop_strategy(platform, apply_event_gate=True):
             "potential_profit": potential_profit,
             "profit_margin_%": round(profit_margin_pct, 2),
             "investment_rating": rating,
-            # "event_pending": card_event_pending,
+            "event_pending": card_event_pending,
+            "days_until_event": days_until_event,
+            "next_event_name": next_event_name,
         })
  
     buy_df = pd.DataFrame(buy_candidates)
@@ -520,7 +550,7 @@ EARLY_GAME_MIN_DAILY_SALES = 5
 EARLY_GAME_DECELERATION_RATIO = 0.7
 
 
-def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
+def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE, apply_event_gate=True):
     """
     Early-game buy strategy for meta gold cards - for the launch-window
     period when drop_strategy's mean-reversion assumption doesn't hold.
@@ -536,12 +566,51 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
     comparison) rather than fitting a curve - early game means there isn't
     much history to fit one against yet anyway.
 
+    That deceleration premise assumes supply grows smoothly day over day.
+    A scheduled event (TOTW/promo, tracked in unique_events by the event
+    scraper) breaks that assumption outright - it's a discontinuous supply
+    shock, not a continuation of the decay curve "today's drop is smaller
+    than yesterday's" is trying to read. Same flag-not-skip approach as
+    drop_strategy's event gate: still surface the candidate (the
+    deceleration read may well be right), but mark it so the caller knows
+    not to trust it blindly going into a known supply shock.
+
     min_days_live: cards with less history than this are skipped entirely.
     """
     df = fetch_daily_price_history(platform=platform, min_daily_sales=EARLY_GAME_MIN_DAILY_SALES)
     if df.empty:
         print(f"No daily price history on {platform}")
         return pd.DataFrame()
+
+    # Pulled once per call, not once per card - see drop_strategy's identical note.
+    # Wide lookahead so a promo a few days out still shows up informationally;
+    # event_pending below narrows that down to the "distrust the signal" case.
+    next_event = None
+    if apply_event_gate:
+        now_uk = datetime.now(pytz.timezone("Europe/London")).replace(tzinfo=None)
+        upcoming_events = fetch_upcoming_events(lookahead_hours=EVENT_LOOKAHEAD_HOURS)
+        # Only scraped one-off events (TOTW/promos) - recurring ones (e.g.
+        # Division Rivals Rewards, weekly) fire every week regardless and
+        # would otherwise dominate "next event" with something that's
+        # already priced into normal weekly patterns rather than the actual
+        # supply shocks this is meant to catch.
+        # Only events not yet over - an event that started is still relevant
+        # (active_or_future includes "active now") until it actually ends.
+        active_or_future = [
+            e for e in upcoming_events if e["source"] == "unique" and e["end"] >= now_uk
+        ]
+        if active_or_future:
+            next_event = min(active_or_future, key=lambda e: e["start"])
+
+    if next_event is not None:
+        hours_until_event = (next_event["start"] - now_uk).total_seconds() / 3600
+        days_until_event = round(hours_until_event / 24, 1)
+        event_pending = hours_until_event <= EVENT_PENDING_HOURS
+        next_event_name = next_event["event_name"]
+    else:
+        days_until_event = None
+        event_pending = False
+        next_event_name = None
 
     candidates = []
 
@@ -583,6 +652,9 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
             # signal here is "the fall is easing", not "it's momentarily cheap",
             # so waiting for that confirmation costs a bit of edge on purpose.
             "suggested_buy": round(latest_price * 1.01),
+            "event_pending": event_pending,
+            "days_until_event": days_until_event,
+            "next_event_name": next_event_name,
         })
 
     candidates_df = pd.DataFrame(candidates)
@@ -595,6 +667,9 @@ def early_game_strategy(platform, min_days_live=EARLY_GAME_MIN_DAYS_LIVE):
         has_live = candidates_df["live_price"].notna()
         candidates_df.loc[has_live, "suggested_buy"] = candidates_df.loc[has_live, "live_price"].round().astype(int)
         candidates_df = candidates_df.drop(columns=["live_price"])
-        candidates_df = candidates_df.sort_values("latest_daily_change_%")
+        # Clean (no pending event) candidates first, biggest deceleration
+        # within each group second - same "surface it but deprioritize it"
+        # treatment drop_strategy gives its pending-event flag.
+        candidates_df = candidates_df.sort_values(["event_pending", "latest_daily_change_%"])
 
     return candidates_df
